@@ -148,7 +148,9 @@ details.more summary{cursor:pointer;font-weight:800;font-size:13px;color:var(--b
 .ctile .track{width:100%;height:5px;background:#dfe7f2;border-radius:4px;overflow:hidden;margin-top:2px}
 .ctile .fill{display:block;height:100%;border-radius:4px}
 .factbtn{margin:2px 0 6px}
-.fact{margin:0 0 8px;font-weight:600;line-height:1.45;font-size:13.5px;background:#fff7d6;border-radius:14px;padding:10px 12px}
+.photos{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;margin:6px 0 8px;padding-bottom:6px;min-height:150px}
+.photos img{flex:0 0 auto;height:170px;max-width:85%;object-fit:cover;border-radius:14px;scroll-snap-align:start;background:var(--paper-2)}
+.photos.loading{align-items:center;justify-content:center;background:var(--paper-2);border-radius:14px;color:var(--muted);font-weight:700}
 .need{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:3px 6px;font-size:12.5px;font-weight:700;min-width:0}
 .need i{width:10px;height:10px;border-radius:50%;box-shadow:inset 0 -2px 0 rgba(0,0,0,.15)}
 .need span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1509,7 +1511,7 @@ function arrive(tr){
   let tu=0; tr.unl=[];
   if(idx>=0){ const by={}; tr.loads.forEach((l,i)=>{ if(l && accepts(s,l.c)) (by[l.c]=by[l.c]||[]).push(i); });
     const n=tr.route.length;
-    for(const c in by){ let later=0; for(let d=1; d<n; d++){ const t=site(tr.route[(idx+d)%n]); if(isSourceOf(t,c)) break; if(acceptList(t).includes(c)) later++; }
+    for(const c in by){ let later=0; for(let d=1; d<n; d++){ const t=site(tr.route[(idx+d)%n]); if(isSourceOf(t,c) && !acceptList(t).includes(c)) break; if(acceptList(t).includes(c)) later++; }
       const want=tr.split&&tr.split[idx]?tr.split[idx][c]:null;
       const take = want!=null ? Math.min(want,by[c].length) : (later ? Math.ceil(by[c].length/(later+1)) : by[c].length);   // leave some for the next stops that need it too
       tr.unl.push(...by[c].slice(0,take)); } }
@@ -2701,12 +2703,26 @@ function cityCardHtml(s){
   const kind = s.kind==='airport'?L('Letiště','Airport','Flughafen'):s.kind==='city'?(s.tourist?L('Turistické místo','Tourist town','Ausflugsort'):L('Město','City','Stadt')):(s.kind==='factory'?L('Továrna','Factory','Fabrik'):L('Místo','Site','Ort'));
   const fact=FACTS[s.id]?L(...FACTS[s.id]):L(...s.desc);
   return `<header><i class="dot" style="background:${labelColor(s)}"></i><div><h2>${s.name}</h2><small>${kind}${s.levels?' · '+L('úroveň','level','Stufe')+' '+(s.done?3:s.lvl+1)+'/3':''}</small></div></header>
-  <button class="btn small ghost factbtn" data-tc="fact">💡 ${L('Zajímavost','Fun fact','Wissenswertes')}</button><p class="fact"${factOpen?'':' hidden'}>${fact}</p>
+  <button class="btn small ghost factbtn" data-tc="fact">💡 ${L('Zajímavost','Fun fact','Wissenswertes')}</button>
   <div class="cc"><div><h4>${L('Chce','Wants','Will')}</h4>${wants.length?`<div class="ctiles">${wants.join('')}</div>`:(s.levels?`<p class="sub">${L('Všechno splněno ★★★','All done ★★★','Alles erledigt ★★★')}</p>`:`<p class="sub">${L('nic','nothing','nichts')}</p>`)}</div>
   <div><h4>${L('Nabízí','Offers','Bietet')}</h4>${offers.length?`<div class="ctiles">${offers.join('')}</div>`:`<p class="sub">${L('nic','nothing','nichts')}</p>`}</div></div>
   <div class="actions"><button class="btn small" data-tc="newtrain">${L('Nový vlak odsud','New train from here','Neuer Zug von hier')}</button><button class="btn small ghost" data-tc="more">${L('Odjezdy','Departures','Abfahrten')}</button><button class="btn small ghost" data-tc="close">${L('Zavřít','Close','Schließen')}</button></div>`; }
-let factOpen=false;
-function showCityCard(s){ if(cardSite!==s) factOpen=false; cardTrain=null; cardSite=s; tcHtml=cityCardHtml(s); tcard.innerHTML=tcHtml; tcWrap.hidden=false; }
+// photos of the real place from Wikipedia (Wikimedia Commons); without internet the text alone is shown
+const WIKI={praha:'Prague',brno:'Brno',ostrava:'Ostrava',plzen:'Plzeň',cb:'České Budějovice',krumlov:'Český Krumlov',valtice:'Valtice',kv:'Karlovy Vary',kh:'Kutná Hora',telc:'Telč',
+  letiste:'Václav Havel Airport Prague',lipno:'Lipno Reservoir',zatec:'Žatec',litvinov:'Litvínov',hana:'Haná',karvina:'Karviná',trinec:'Třinec',otrokovice:'Otrokovice',novybor:'Nový Bor',mikulov:'Mikulov',mb:'Mladá Boleslav'};
+const photoCache=new Map();
+function sitePhotos(s){ const t=WIKI[s.id]; if(!t) return Promise.resolve([]); if(photoCache.has(t)) return photoCache.get(t);
+  const pr=fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/'+encodeURIComponent(t.replace(/ /g,'_')),{headers:{'Api-User-Agent':'Koleje game (https://github.com/ja-barista/Koleje-hra)'}}).then(r=>r.ok?r.json():{items:[]}).then(d=>(d.items||[])
+    .filter(i=>i.type==='image' && i.srcset && i.srcset[0] && /\.jpe?g$/i.test(i.title||'') && !/flag|coa|coat|znak|erb|map|logo|locat|signature/i.test(i.title||''))
+    .slice(0,5).map(i=>({src:(i.srcset[0].src.startsWith('//')?'https:':'')+i.srcset[0].src, page:'https://commons.wikimedia.org/wiki/'+encodeURIComponent(i.title)}))).catch(()=>{ photoCache.delete(t); return []; });
+  photoCache.set(t,pr); return pr; }
+function showFact(s){ const txt=FACTS[s.id]?L(...FACTS[s.id]):L(...s.desc);
+  const html=ph=>`<span class="eyebrow">💡 ${L('Zajímavost','Fun fact','Wissenswertes')}</span><h2>${s.name}</h2>${ph}<p>${txt}</p><div class="actions"><button class="btn" data-backsite="${s.id}">← ${L('Zpět','Back','Zurück')}</button><button class="btn ghost" data-close>${L('Zavřít','Close','Schließen')}</button></div>`;
+  openSheet(html(`<div class="photos loading"><span>${L('Načítám fotky…','Loading photos…','Fotos werden geladen…')}</span></div>`),'fact');
+  sitePhotos(s).then(urls=>{ if(sheetKind!=='fact' || !sheet.querySelector('h2') || sheet.querySelector('h2').textContent!==s.name) return;
+    const ph = urls.length ? `<div class="photos">${urls.map(u=>`<img src="${esc(u.src)}" alt="${esc(s.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`).join('')}</div><p class="sub tiny">${L('Fotky z Wikimedia Commons, autoři a licence:','Photos from Wikimedia Commons, authors and licences:','Fotos von Wikimedia Commons, Urheber und Lizenzen:')} ${urls.map((u,i)=>`<a href="${esc(u.page)}" target="_blank" rel="noopener">${i+1}</a>`).join(' · ')}</p>` : '';
+    openSheet(html(ph),'fact',true); }); }
+function showCityCard(s){ cardTrain=null; cardSite=s; tcHtml=cityCardHtml(s); tcard.innerHTML=tcHtml; tcWrap.hidden=false; }
 const money2 = v => `<b class="${v>=0?'okc':'warn'}">${v>=0?'+':'−'}${fmtK(Math.abs(Math.round(v)))}</b>`;
 // big countdown to the next departure (1 game minute = 1 s at 1×)
 function countdownHtml(tr){ let t=null, what='';
@@ -2729,7 +2745,7 @@ const tcard=tcWrap.firstChild; let tcHtml='';
 function showTrainCard(tr){ cardSite=null; cardTrain=tr; tcHtml=trainCardHtml(tr); tcard.innerHTML=tcHtml; tcWrap.hidden=false; }
 function hideTrainCard(){ cardTrain=null; cardSite=null; warnOpen=false; tcWrap.hidden=true; }
 tcWrap.addEventListener('click',e=>{ if(e.target===tcWrap){ hideTrainCard(); return; } const b=e.target.closest('[data-tc]'); if(!b) return; const tr=cardTrain, cs=cardSite; hideTrainCard();
-  if(b.dataset.tc==='fact' && cardSite){ factOpen=!factOpen; showCityCard(cardSite); return; }
+  if(b.dataset.tc==='fact' && cs){ showFact(cs); return; }
   if(b.dataset.tc==='fix'){ openEditor(+b.dataset.id); return; } if(b.dataset.tc==='newtrain' && cs){ openEditor(0,cs.id); return; } if(b.dataset.tc==='more' && cs){ showSite(cs); return; }
   if(b.dataset.tc==='reset' && tr){ resetTrain(tr); return; }
   if(b.dataset.tc==='edit' && tr) openEditor(tr.id);
@@ -2991,10 +3007,19 @@ function edHtml(){
 }
 const sellValue = d => Math.round((COST.loco + consistPrice(d.orig&&d.orig.length?d.orig:d.consist))*0.5);
 function wagonsFor(d,c){ return d.consist.filter(w=>WAGONS[w].carries.includes(c)).length; }
-function autoTake(d,i,c){ const n=d.route.length, have=wagonsFor(d,c); let later=0; for(let k=1;k<n;k++){ const t=site(d.route[(i+k)%n]); if(isSourceOf(t,c)) break; if(acceptList(t).includes(c)) later++; } return later?Math.ceil(have/(later+1)):have; }
+// how many wagons of a good a stop takes when left to itself: the load is shared out stop by stop as the train goes round,
+// and a stop that also sends the good fills the freed wagons up again
+function autoTake(d,i,c){ const n=d.route.length, have=wagonsFor(d,c), fs=firstSource(d,c); if(fs<0) return have; let rem=have;
+  for(let k=1;k<=n;k++){ const j=(fs+k)%n, t=site(d.route[j]); let take=0;
+    if(acceptList(t).includes(c)){ let later=0; for(let q=1;q<n;q++){ const u=site(d.route[(j+q)%n]); if(isSourceOf(u,c) && !acceptList(u).includes(c)) break; if(acceptList(u).includes(c)) later++; }
+      const want=d.split&&d.split[j]&&d.split[j][c]!=null?d.split[j][c]:null; take=Math.min(rem, want!=null?want:(later?Math.ceil(rem/(later+1)):rem)); }
+    if(j===i) return take; rem-=take; if(isSourceOf(t,c)) rem=have; }
+  return 0; }
+// the stop where a good is first loaded on this route: it is never unloaded there again
+const firstSource=(d,c)=>d.route.findIndex(id=>isSourceOf(site(id),c));
 function splitRows(d){ const out=[], n=d.route.length; if(n<2) return out;
   for(const c of Object.keys(CARGO)){ const max=wagonsFor(d,c); if(!max) continue; if(!d.route.some(id=>isSourceOf(site(id),c))) continue;
-    const acc=d.route.map((id,i)=>i).filter(i=>acceptList(site(d.route[i])).includes(c) && !isSourceOf(site(d.route[i]),c)); if(acc.length<2) continue;
+    const acc=d.route.map((id,i)=>i).filter(i=>acceptList(site(d.route[i])).includes(c) && i!==firstSource(d,c)); if(acc.length<2) continue;
     for(const i of acc){ const v=d.split&&d.split[i]?d.split[i][c]:null; out.push({i,c,max,val:v!=null?v:autoTake(d,i,c),auto:v==null}); } }
   return out; }
 function edAction(b){
@@ -3107,6 +3132,7 @@ sheet.addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) r
   if(b.dataset.levels!==undefined){ closeSheet(); showTab('levels'); return; }
   if(b.dataset.plans!==undefined){ closeSheet(); showTab('plans'); return; }
   if(b.dataset.site){ showSite(site(b.dataset.site)); return; }
+  if(b.dataset.backsite){ closeSheet(); showCityCard(site(b.dataset.backsite)); return; }
   if(b.dataset.reset!==undefined){ resetGame(); closeSheet(); return; }
   if(b.dataset.zoom!==undefined){ zoomInvert=b.dataset.zoom==='1'; try{ localStorage.setItem('zi-zoom2',zoomInvert?'1':'0'); }catch(e){} $('playerBtn').click(); return; }
   if(b.dataset.glogin!==undefined){ googleLogin(); return; }
