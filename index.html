@@ -1364,7 +1364,13 @@ function choosePlat(tr,node,to){ const s=nodeSite.get(node), used=new Set(trains
   if(to!=null){ for(let k=0;k<s.plat;k++) if(!used.has(k) && routeFromPlat(s,k,to,tr)) return k; for(let k=0;k<s.plat;k++) if(routeFromPlat(s,k,to,tr)) return k; }
   return freePlat(node,tr); }
 function placeAt(tr,i){ tr.stopIdx=i; tr.at=stopNode(tr,i); tr.plat=choosePlat(tr,tr.at,tr.route.length>1?stopNode(tr,(i+1)%tr.route.length):null); tr.path=null; tr.pi=0; tr.t=0; tr.trail=[]; }
-function makeTrain(def){
+// a route goes round in a loop, so the same stop twice in a row (or the last stop again at the start) is no leg at all:
+// drop the repeat together with its timetable, track and via entries
+function cleanRoute(o){ const keep=o.route.map((id,i)=>{ const n=o.route.length, prev=o.route[(i-1+n)%n]; return n<2 || i===0 || id!==prev; });
+  if(o.route.length>2 && o.route[o.route.length-1]===o.route[0]) keep[o.route.length-1]=false;
+  if(keep.every(Boolean)) return o; const f=a=>Array.isArray(a)?a.filter((_,i)=>keep[i]):a;
+  o.route=f(o.route); o.waits=f(o.waits); o.plats=f(o.plats); o.vias=f(o.vias); o.split=f(o.split); return o; }
+function makeTrain(def){ cleanRoute(def);
   const tr={id:def.id||nextId++, name:def.name, color:def.color, consist:[...def.consist], route:[...def.route], start:def.start, every:def.every, waits:[...(def.waits||[])],
     loads:def.consist.map(()=>null), pend:[], unl:[], st:'ready', trail:[], why:'', delay:0, cycleBase:null, smokeAcc:0, auto:!!def.auto, plats:def.plats?[...def.plats]:null, vias:def.vias?def.vias.map(a=>[...(a||[])]):null, split:def.split?def.split.map(o=>({...(o||{})})):null, earned:def.earned||0, ran:def.ran||0, bought:def.bought||0};
   if(tr.id>=nextId) nextId=tr.id+1;
@@ -2839,7 +2845,7 @@ document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.data
 $('tools').prepend($('menuBtn')); $('doneBtn').onclick=()=>{ if(tool==='route'){ if(rStops.length>1) routeDone(); else routeExit(); } else setTool('pan'); };
 function routeExit(){ const d=rDraft; rDraft=null; setTool('pan'); if(d){ draft=d; openSheet(edHtml(),'editor'); } }
 function routeDone(){ const ch=routeCheck(rStops,rPlats,rVias); if(!ch.ok){ toast(legFailMsg(rStops,ch.i,rPlats),'bad',7000); return; }
-  const r=[...rStops], pk=[...rPlats], vv=rVias.map(a=>[...a]), d0=rDraft; rDraft=null; setTool('pan');
+  const cr=cleanRoute({route:[...rStops],plats:[...rPlats],vias:rVias.map(a=>[...a])}), r=cr.route, pk=cr.plats, vv=cr.vias, d0=rDraft; rDraft=null; setTool('pan');
   if(d0) draft=d0; else openEditor(0);
   draft.route=r; draft.plats=pk.some(x=>x!=null)?pk:null; draft.vias=vv.some(a=>a.length)?vv:null; draft.waits=r.map(()=>0); draft.split=null; draft.adding=false;
   if(!draft.consist.length) autoConsist(draft); fitEvery(draft,true); openSheet(edHtml(),'editor'); }
@@ -3054,7 +3060,7 @@ function edAction(b){
 }
 function fitEvery(d,shrink){ const pl=planOf(d); if(!pl.ok) return; if(shrink){ d.every=Math.ceil(pl.cycle+0.5)/60; return; } if(pl.cycle>d.every*60){ const e=[...EVERY].reverse().find(e=>e*60>=pl.cycle); d.every=e||24; } }
 function saveDraft(){
-  const d=draft, pr=draftPrice(d);
+  const d=cleanRoute(draft), pr=draftPrice(d);
   if(!d.id){ setMoney(money-pr.cost); const tr=makeTrain({name:d.name,color:d.color,consist:d.consist,route:d.route,start:d.start,every:d.every,waits:d.waits,bought:pr.cost,auto:!d.manual,plats:d.plats||null,vias:d.vias||null,split:d.split||null});
     toast(L(`${tr.name} nakládá ve stanici ${site(tr.route[0]).name}, odjezd v ${hm(tr.depAt)}.`,`${tr.name} is loading at ${site(tr.route[0]).name}, departs at ${hm(tr.depAt)}.`,`${tr.name} lädt in ${site(tr.route[0]).name}, Abfahrt um ${hm(tr.depAt)}.`),'good',4200);
     dirty(); closeSheet(); const n0=nodes[site(tr.route[0]).node]; target.x=n0.x-CX; target.z=n0.y-CZ; camD=Math.min(camD,520); updateCamera(); return; }
