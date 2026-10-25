@@ -4,7 +4,7 @@
   "description": "Postav železnici napříč Českem a dovez městům, co potřebují.",
   "start_url": "./index.html",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
   "orientation": "landscape",
   "background_color": "#a8e0ff",
   "theme_color": "#7cc9f5",

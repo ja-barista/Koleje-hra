@@ -1386,7 +1386,7 @@ function depart(tr){
   const A=NP(path,0), B=NP(path,1), [ux,uy]=unit(A.x,A.y,B.x,B.y);
   if(!(tr.trail.length>1 && Math.hypot(tr.trail[0].x-A.x,tr.trail[0].y-A.y)<3)){ tr.trail=[]; for(let d=0; d<=130; d+=2) tr.trail.push({x:A.x-ux*d, y:A.y-uy*d}); }   // carrying straight on: the wagons stay where they stood
   tr.ang=Math.atan2(uy,ux);
-  tr._sq=false; { const m=tr.parts&&tr.parts[0]; if(m) sndHorn(m.position.x+CX,m.position.z+CZ,Math.random()<0.5); }
+  tr._sq=false; { const m=tr.parts&&tr.parts[0]; if(m) sndWhistle(m.position.x+CX,m.position.z+CZ); }
   { const own=new Set(); for(let i=0;i<path.length-1;i++) own.add(ekey(path[i],path[i+1])); tr.relq=(tr.relq||[]).filter(x=>{ if(own.has(x.k)){ if(occ.get(x.k)===tr.id) occ.delete(x.k); return false; } return true; }); }
   if(tryEnter(tr)) tr.st='run'; else { tr.st='hold'; tr.check=1; }
 }
@@ -1809,6 +1809,7 @@ scene.add(slab(new T.Shape(BORDER.map(([x,y])=>new T.Vector2(x-CX,-(y-CZ)))),18,
 { const bx=BORDER.map(([x,y])=>{ const dx=x-CX, dy=y-215*SC, l=Math.hypot(dx,dy); return new T.Vector2(x-CX+dx/l*14, -(y-CZ+dy/l*14)); }); scene.add(slab(new T.Shape(bx),6,[M.sand,M.sand],-24)); }
 for(const [[x1,y1],[x2,y2]] of riverSegs){ const l=Math.hypot(x2-x1,y2-y1); const o=mesh(box,M.river,(x1+x2)/2-CX,0.12,(y1+y2)/2-CZ,l,0.25,16,false); o.rotation.y=-Math.atan2(y2-y1,x2-x1); const g=new T.Group(); g.add(o); g.add(mesh(cyl,M.river,x2-CX,0.12,y2-CZ,8,0.25,8,false)); bake(g,STATIC_POOL); }
 
+const boats=[];   // sailing boats: hidden wherever a line crosses the lake
 const lakeTex=waterTex.clone(); lakeTex.needsUpdate=true; lakeTex.repeat.set(1/40,1/40);
 {   const water=new T.MeshLambertMaterial({map:lakeTex,color:'#d6f0ff'}), shore=mat('#e8d7a0'), reed=mat('#6f9a3c'), reed2=mat('#8bb04a');
   const shape=(pts,grow)=>{ const cx=pts.reduce((a,p)=>a+p[0],0)/pts.length, cy=pts.reduce((a,p)=>a+p[1],0)/pts.length; return new T.Shape(pts.map(([x,y])=>{ const dx=x-cx, dy=y-cy, l=Math.hypot(dx,dy)||1; return new T.Vector2(x+dx/l*grow-CX, -(y+dy/l*grow-CZ)); })); };
@@ -1817,7 +1818,7 @@ const lakeTex=waterTex.clone(); lakeTex.needsUpdate=true; lakeTex.repeat.set(1/4
     for(let i=0;i<L.pts.length;i++){ if(rr2()<0.35) continue; const A=L.pts[i], B=L.pts[(i+1)%L.pts.length];   // reed beds along part of the shore
       for(let k=0;k<3;k++){ const f=rr2(), x=A[0]+(B[0]-A[0])*f, y=A[1]+(B[1]-A[1])*f, h=2+rr2()*2.5; g.add(mesh(cone4,rr2()<0.5?reed:reed2,x-CX+(rr2()-.5)*3,h/2,y-CZ+(rr2()-.5)*3,0.8,h,0.8,false)); } }
     if(L.a>=80) for(let k=0;k<2;k++){ const t=rr2()*Math.PI*2, bx=L.x+Math.cos(t)*L.a*0.35, by=L.y+Math.sin(t)*L.b*0.3; if(!inPts(bx,by,L.pts)) continue;   // a couple of sailing boats
-      const b=new T.Group(); b.position.set(bx-CX,0.5,by-CZ); b.rotation.y=rr2()*6; b.add(mesh(box,M.white,0,0.5,0,7,1,2.4)); b.add(mesh(cyl8,M.trunk,0.5,5,0,0.2,9,0.2)); b.add(mesh(cone4,M.white,1.8,5,0,2.2,7,0.2)); g.add(b); }
+      const b=new T.Group(); b.position.set(bx-CX,0.5,by-CZ); b.rotation.y=rr2()*6; b.add(mesh(box,M.white,0,0.5,0,7,1,2.4)); b.add(mesh(cyl8,M.trunk,0.5,5,0,0.2,9,0.2)); b.add(mesh(cone4,M.white,1.8,5,0,2.2,7,0.2)); scene.add(b); boats.push({obj:b,x:bx,y:by}); }
     bake(g,STATIC_POOL); } }
 
 let seed=7; const rnd=()=>{ seed=(seed*16807)%2147483647; return (seed-1)/2147483646; };
@@ -1828,6 +1829,36 @@ for(const m of MOUNTAINS){ const g=new T.Group(); g.position.set(m.x-CX,0,m.y-CZ
     const p=mesh(peak,rnd()<0.5?M.rock:M.rock2,ox*m.r,h/2,oz*m.r,r,h,r); p.rotation.y=rnd()*3; g.add(p);
     if(m.snow && hs>0.7){ const s=mesh(peak,M.snow,ox*m.r,h*0.84,oz*m.r,r*0.34,h*0.32,r*0.34); s.rotation.y=p.rotation.y; g.add(s); } }
   bake(g,STATIC_POOL); }
+
+/* ----- people on the platforms: they stroll up and down, stop now and then, and pairs stop for a chat ----- */
+const people=[];
+{ const COLS=['#e8564a','#3d8bff','#f2c200','#2e9e5b','#9b59b6','#ff8a2b','#22c3d6','#5b6472','#f06292','#8d6e63'];
+  let ps=19; const pr=()=>{ ps=(ps*16807)%2147483647; return (ps-1)/2147483646; };
+  for(const st of SITES){ const half=(st.plat-1)/2*PLAT_GAP, PL=st.plen, strips=[];
+    for(let k=0;k<st.plat-1;k++) strips.push({z:k*PLAT_GAP-half+PLAT_GAP/2, len:PL-16, w:1.1});
+    strips.push({z:-half-7, len:PL-10, w:1.4});
+    const n = st.kind==='city' ? 4+st.plat*2 : 2+st.plat;
+    for(let i=0;i<n;i++){ const sp=strips[i%strips.length];
+      people.push({s:st, sp, x:(pr()-0.5)*sp.len, z:sp.z+(pr()-0.5)*sp.w, dir:pr()<0.5?-1:1, v:2.2+pr()*1.6, wait:pr()*4, talk:null, col:COLS[Math.floor(pr()*COLS.length)], ph:pr()*6}); } }
+  const body=new T.CylinderGeometry(0.55,0.62,1.9,8), head=new T.SphereGeometry(0.46,10,8);
+  window.__pplBody=new T.InstancedMesh(body,new T.MeshLambertMaterial(),people.length); window.__pplHead=new T.InstancedMesh(head,mat('#f3c9a5'),people.length);
+  const c=new T.Color(); people.forEach((q,i)=>__pplBody.setColorAt(i,c.set(q.col)));
+  for(const m of [__pplBody,__pplHead]){ m.frustumCulled=false; m.castShadow=false; m.count=0; scene.add(m); } }
+function peopleTick(dt){ const B=window.__pplBody, H=window.__pplHead; if(!B) return;
+  if(camD>900){ B.count=0; H.count=0; return; }   // too small to see from far away
+  for(const q of people){
+    if(q.talk){ q.wait-=dt; if(q.wait<=0){ q.talk.talk=null; q.talk.wait=0; q.talk=null; q.dir=-q.dir; } }
+    else if(q.wait>0) q.wait-=dt;
+    else { q.x+=q.dir*q.v*dt; const lim=q.sp.len/2; if(q.x>lim){ q.x=lim; q.dir=-1; } if(q.x<-lim){ q.x=-lim; q.dir=1; }
+      if(Math.random()<dt*0.12) q.wait=1.5+Math.random()*4;   // stops to look around
+      else if(Math.random()<dt*0.5) for(const o of people){ if(o===q || o.sp!==q.sp || o.talk || o.wait>0 || Math.abs(o.x-q.x)>2.6) continue; const t=4+Math.random()*6;   // two meet: they stop for a chat
+        q.talk=o; o.talk=q; q.wait=o.wait=t; q.dir=o.x>q.x?1:-1; o.dir=-q.dir; break; } }
+    q.ph+=dt*(q.wait>0?2:8); }
+  let i=0; const e=new T.Euler();
+  for(const q of people){ const [wx,wy]=toW(q.s,q.x-2,q.z), bob=q.wait>0?(q.talk?Math.abs(Math.sin(q.ph))*0.12:0):Math.abs(Math.sin(q.ph))*0.25, ang=-(q.s.ang+(q.dir<0?Math.PI:0));
+    tmpP.set(wx-CX,2.8+0.95+bob,wy-CZ); tmpQ.setFromEuler(e.set(0,ang,0)); tmpS.set(1,1,1); tmpM.compose(tmpP,tmpQ,tmpS); B.setMatrixAt(i,tmpM);
+    tmpP.y+=1.35+(q.talk?Math.sin(q.ph*1.7)*0.08:0); tmpM.compose(tmpP,tmpQ,tmpS); H.setMatrixAt(i,tmpM); i++; }
+  B.count=H.count=i; B.instanceMatrix.needsUpdate=H.instanceMatrix.needsUpdate=true; if(B.instanceColor) B.instanceColor.needsUpdate=true; }
 
 /* ----- smoke ----- */
 const puffs=[], emitters=[];
@@ -1881,19 +1912,31 @@ const industryAt=[];
 
 /* ----- trees ----- */
 const trees=[];
+// height of the rocky slope under a tree (the visible 7-sided cones sit a little inside the round rockH, so stay on the low side)
+// or null above the tree line, where only rock and snow belong
+function slopeH(x,y){ let h=0, top=0; for(const m of MOUNTAINS){ if(m.hill) continue; for(const p of m.peaks){ const d=Math.hypot(x-p.x,y-p.y); if(d>=p.r*0.9) continue; const v=p.h*(1-d/(p.r*0.9)); if(v>h){ h=v; top=p.h; } } }
+  return h>0 && h>top*0.6 ? null : h; }
 for(let k=0;k<60000 && trees.length<7000;k++){ const x=30+rnd()*(700*SC-60), y=30+rnd()*(415*SC-60); if(!inPoly(x,y)) continue;
   const base = (rnd()<0.65 && trees.length) ? trees[Math.floor(rnd()*trees.length)] : null;
   const tx=base? base.x+(rnd()-.5)*34 : x, ty=base? base.y+(rnd()-.5)*34 : y;
   if(!inPoly(tx,ty)||!inPoly(tx+10,ty)||!inPoly(tx-10,ty)||!inPoly(tx,ty+10)||!inPoly(tx,ty-10)) continue;
   if(SITES.some(s=>{const n=nodes[s.node]; return Math.hypot(n.x-tx,n.y-ty)<(s.kind==='city'?78:66);})) continue;
-  if(rockH(tx,ty)>1 || nearRiver(tx,ty,8) || inLake(tx,ty,9)) continue;
-  trees.push({x:tx,y:ty,s:0.75+rnd()*0.6,v:rnd()<0.5}); }
+  const sh=slopeH(tx,ty); if(sh===null || nearRiver(tx,ty,8) || inLake(tx,ty,9)) continue;
+  trees.push({x:tx,y:ty,s:0.75+rnd()*0.6,v:sh>1?rnd()<0.85:rnd()<0.5,h:sh>1?sh-1.2:null}); }
 // national parks: thick, mostly spruce forest
 const PARKS = TUT ? [] : [[13.62,48.98,240,'Šumava'],[15.62,50.69,150,'Krkonoše'],[14.36,50.86,95,'České Švýcarsko'],[15.92,48.86,85,'Podyjí']].map(([lon,lat,r,name])=>{ const [x,y]=P(lon,lat); return {x,y,r,name}; });
-for(const pk of PARKS){ let n=0; for(let k=0;k<9000 && n<480;k++){ const a=rnd()*Math.PI*2, d=Math.sqrt(rnd())*pk.r, tx=pk.x+Math.cos(a)*d, ty=pk.y+Math.sin(a)*d;
+// every rocky range is wooded on its lower slopes, up to the bare rock and snow
+for(const m of MOUNTAINS){ if(m.hill) continue; let n=0; const want=Math.min(380,Math.round(m.bound*m.bound/260));
+  for(let k=0;k<want*6 && n<want;k++){ const a=rnd()*Math.PI*2, d=Math.sqrt(rnd())*m.bound, tx=m.x+Math.cos(a)*d, ty=m.y+Math.sin(a)*d; const sh=slopeH(tx,ty);
+    if(sh===null || sh<=1 || !inPoly(tx,ty) || nearRiver(tx,ty,8) || inLake(tx,ty,9) || SITES.some(q=>Math.hypot(nodes[q.node].x-tx,nodes[q.node].y-ty)<70)) continue;
+    trees.push({x:tx,y:ty,s:0.75+rnd()*0.6,v:rnd()<0.85,h:sh-1.2}); n++; } }
+// a park lies over its mountains: centre it on the rocky range that was nudged inland, and make it reach over all of it
+for(const pk of PARKS){ const ms=MOUNTAINS.filter(m=>!m.hill && Math.hypot(m.x-pk.x,m.y-pk.y)<pk.r+80); if(!ms.length) continue;
+  pk.x=ms.reduce((a,m)=>a+m.x,0)/ms.length; pk.y=ms.reduce((a,m)=>a+m.y,0)/ms.length; pk.r=Math.max(pk.r,...ms.map(m=>Math.hypot(m.x-pk.x,m.y-pk.y)+m.bound*0.8)); }
+for(const pk of PARKS){ let n=0; for(let k=0;k<14000 && n<(pk.r>120?900:480);k++){ const a=rnd()*Math.PI*2, d=Math.sqrt(rnd())*pk.r, tx=pk.x+Math.cos(a)*d, ty=pk.y+Math.sin(a)*d;
     if(!inPoly(tx,ty)||!inPoly(tx+10,ty)||!inPoly(tx-10,ty)||!inPoly(tx,ty+10)||!inPoly(tx,ty-10)) continue;
-    if(SITES.some(s=>{const q=nodes[s.node]; return Math.hypot(q.x-tx,q.y-ty)<(s.kind==='city'?78:66);}) || rockH(tx,ty)>1 || nearRiver(tx,ty,8) || inLake(tx,ty,9)) continue;
-    trees.push({x:tx,y:ty,s:0.8+rnd()*0.7,v:rnd()<0.8}); n++; } }
+    if(SITES.some(s=>{const q=nodes[s.node]; return Math.hypot(q.x-tx,q.y-ty)<(s.kind==='city'?78:66);}) || nearRiver(tx,ty,8) || inLake(tx,ty,9)) continue; const sh=slopeH(tx,ty); if(sh===null) continue;
+    trees.push({x:tx,y:ty,s:0.8+rnd()*0.7,v:rnd()<0.8,h:sh>1?sh-1.2:null}); n++; } }
 const treeA=trees.filter(t=>t.v), treeB=trees.filter(t=>!t.v);
 const gTrunk=new T.CylinderGeometry(1,1,1,5), gCone=new T.ConeGeometry(1,1,7), gBall=new T.IcosahedronGeometry(1,0);
 const trunkIM=new T.InstancedMesh(gTrunk,M.trunk,trees.length), crownA=new T.InstancedMesh(gCone,M.leaf1,treeA.length), crownB=new T.InstancedMesh(gBall,M.leaf2,treeB.length);
@@ -2088,7 +2131,8 @@ if(!TUT){ rockTown(15.3,50.47,16,26); rockTown(16.12,50.61,18,30); rockTown(14.3
     g2.font="800 40px 'Baloo 2', 'Trebuchet MS', sans-serif"; const t=L('NP ','NP ','NP ')+pk.name, w=Math.min(500,g2.measureText(t).width+60), x0=(512-w)/2;
     g2.fillStyle='rgba(20,60,30,0.25)'; rr(g2,x0,10,w,80,26); g2.fill(); g2.fillStyle='#2f7a3e'; rr(g2,x0,4,w,80,26); g2.fill();
     g2.fillStyle='#ffffff'; g2.textAlign='center'; g2.textBaseline='middle'; g2.fillText(t,256,46);
-    const sp=new T.Sprite(new T.SpriteMaterial({map:new T.CanvasTexture(c),depthWrite:false,transparent:true})); sp.position.set(pk.x-CX,34,pk.y-CZ); sp.renderOrder=2; scene.add(sp); parkLabels.push(sp); } }
+    let top=0; for(let k=0;k<40;k++){ const a=k*2.4, d=Math.sqrt(k/40)*pk.r; top=Math.max(top,rockH(pk.x+Math.cos(a)*d,pk.y+Math.sin(a)*d)); }
+    const sp=new T.Sprite(new T.SpriteMaterial({map:new T.CanvasTexture(c),depthWrite:false,depthTest:false,transparent:true})); sp.position.set(pk.x-CX,Math.max(34,top+16),pk.y-CZ); sp.renderOrder=5; scene.add(sp); parkLabels.push(sp); } }
 
 /* ----- open country: a patchwork of fields ----- */
 let fields=null;
@@ -2263,6 +2307,14 @@ function addBridge(A,B,t,len,k){ const dx=B.x-A.x, dy=B.y-A.y; const x=A.x+dx*t,
   if(sideFree(-1) && sideFree(1)) for(let i=0;i<=2;i++) g.add(mesh(box,M.girder,-len/2+i*len/2,10,0,0.8,0.8,12));
   for(const px of [-len/2,len/2]){ const ax=x+ux*px, ay=y+uy*px; if(!crossTrackNear(ax,ay,8,own)) g.add(mesh(box,M.brick,px,-2,0,4,6,12)); }
   bridgeGroup.add(g); }
+let lakePier=0;
+function addLakeBridge(x,y,ang,len,k){ const g=new T.Group(); g.position.set(x-CX,0,y-CZ); g.rotation.y=-ang;
+  g.add(mesh(box,M_CONC,0,0.1,0,len+0.4,1.4,10.6,false));
+  for(const z of [-5.6,5.6]){ g.add(mesh(box,M.girder,0,0.4,z,len+0.4,1.6,0.7)); g.add(mesh(box,M.girder,0,7.6,z,len+0.4,0.8,0.8)); g.add(mesh(box,M.girder,-len/2,4,z,0.7,7.6,0.7));
+    const d=mesh(box,M.girder,0,4,z,0.5,Math.hypot(len,7.4),0.5); d.rotation.z=((lakePier%2)?1:-1)*Math.atan2(len,7.4); g.add(d); }
+  if(lakePier%2===0) g.add(mesh(box,M.girder,-len/2,7.6,0,0.6,0.6,11.4));
+  if(lakePier++%3===0){ g.add(mesh(box,M.stone,0,-1.6,0,3.2,3.4,12.4)); g.add(mesh(box,M.stone,0,-0.1,0,3.8,0.6,13)); }   // a stone pier standing in the water
+  bridgeGroup.add(g); }
 function addViaduct(x,y,ang,len,pier,k){ const g=new T.Group(); g.position.set(x-CX,flyH(x,y,ang,k)+hillH(x,y),y-CZ); g.rotation.y=-ang;
   for(const sd of [-1,1]) g.add(mesh(box,M.girder,0,0.9,sd*5.2,len+0.4,1.8,0.8,false));
   if(pier && !crossTrackNear(x,y,7.5,ownKeys(k))) g.add(mesh(box,M.stone,0,-1.5,0,2.2,3.6,10.5));
@@ -2311,13 +2363,14 @@ function rebuildTracks(){
         if(sn>=0.5) addBridge(A,B,t,Math.min(60,16/sn+8),sg.k); }
       // running along the water: a low girder viaduct instead of a row of truss bridges
       const L=Math.hypot(B.x-A.x,B.y-A.y), wetLake=!!inLake((A.x+B.x)/2,(A.y+B.y)/2,6+L/2); if(!wetLake && !nearRiver((A.x+B.x)/2,(A.y+B.y)/2,9+L/2)) continue; const n=Math.max(1,Math.round(L/6)), ang=Math.atan2(B.y-A.y,B.x-A.x);
-      for(let k=0;k<n;k++){ const f=(k+0.5)/n, x=A.x+(B.x-A.x)*f, y=A.y+(B.y-A.y)*f; if((!nearRiver(x,y,9) && !inLake(x,y,3)) || done.some(d=>Math.hypot(d.x-x,d.y-y)<14 && d.truss)) continue; addViaduct(x,y,ang,L/n,k%3===1,sg.k); } } }
+      for(let k=0;k<n;k++){ const f=(k+0.5)/n, x=A.x+(B.x-A.x)*f, y=A.y+(B.y-A.y)*f; if((!nearRiver(x,y,9) && !inLake(x,y,3)) || done.some(d=>Math.hypot(d.x-x,d.y-y)<14 && d.truss)) continue; if(inLake(x,y,3)) addLakeBridge(x,y,ang,L/n,sg.k); else addViaduct(x,y,ang,L/n,k%3===1,sg.k); } } }
   // tunnel portals exactly where the line enters the rock
   if(MOUNTAINS.length) for(const sg of segs){ if(!nearTerrain(sg.x1,sg.y1,sg.x2,sg.y2)) continue; const L=Math.hypot(sg.x2-sg.x1,sg.y2-sg.y1), n=Math.max(2,Math.ceil(L/3)), ang=Math.atan2(sg.y2-sg.y1,sg.x2-sg.x1); let was=rockH(sg.x1,sg.y1)>TUN;
     for(let i=1;i<=n;i++){ const x=sg.x1+(sg.x2-sg.x1)*i/n, y=sg.y1+(sg.y2-sg.y1)*i/n, now=rockH(x,y)>TUN; if(now!==was){ addPortal(x,y, now?ang:ang+Math.PI); was=now; } } }
   for(const [id,set] of adj){ if(set.size<3 || isStationNode(id) || portOf.has(id)) continue; const n=nodes[id];
     const g=new T.Group(); g.position.set(n.x-CX+6,hillH(n.x+6,n.y+8),n.y-CZ+8); g.add(mesh(box,M.yellow,0,1.5,0,3,3,3)); const lever=mesh(cyl,M.dark,0,4.5,0,0.4,5,0.4); lever.rotation.z=0.5; g.add(lever); g.add(mesh(sph,M.red,1.3,6.8,0,1,1,1)); switchGroup.add(g); }
   for(const G of [flyGroup,bridgeGroup,portalGroup,switchGroup]){ bake(G,DYN_POOL); G.clear(); } bakeFlush(DYN_POOL);
+  for(const b of boats) b.obj.visible=!trackNear(b.x,b.y,16);
   let sig=''; for(const d of decor){ d.obj.visible=!trackNear(d.x,d.y,d.r+5); sig+=d.obj.visible?'1':'0'; }
   if(sig!==decorSig){ decorSig=sig; for(const d of decor) if(d.obj.visible) bake(d.obj,DECOR_POOL); bakeFlush(DECOR_POOL); }
   updateTrees(); layFields(); updateGridDots(); rebuildSignals(); dirty();
@@ -3151,12 +3204,19 @@ let playerView={name:['Hráč','Player','Spieler'],line:['Připojuji…','Connec
 function setPlayer(name, photo, line, ok){ playerView={name,line,ok}; if(photo) $('avatar').src=photo; paintPlayer(); }
 function setSave(line, ok){ playerView.line=line; playerView.ok=ok; paintPlayer(); }
 function paintPlayer(){ setTimeout(renderMenu,0); $('playerName').textContent=tx(playerView.name); saveStateEl.textContent=tx(playerView.line); saveStateEl.className=playerView.ok?'ok':''; }
+// where a train is right now: on the way, loading, waiting… so after a restart it carries on from the same spot
+const RUN_KEYS=['st','at','plat','stopIdx','nextIdx','path','pi','t','loads','pend','unl','phase','phaseLeft','depAt','plannedDep','cycleBase','delay','legStart','legKm','relq','odo','_arrGrant','_pass','face','check','why','wreckLeft','wreckNode','ang','_sq'];
+function runState(t){ const r={}; for(const k of RUN_KEYS) if(t[k]!==undefined) r[k]=t[k]; r.trail=(t.trail||[]).slice(0,150).map(q=>[Math.round(q.x*10)/10,Math.round(q.y*10)/10]); return r; }
+function restoreRun(tr,r){ if(!r || r.st==='dead') return false;
+  if(r.path){ for(let i=0;i<r.path.length-1;i++) if(!edges.has(ekey(r.path[i],r.path[i+1]))) return false; }   // the track it was on is gone: start over
+  if(r.at!=null && !nodeSite.has(r.at)) return false;
+  for(const k of RUN_KEYS) if(r[k]!==undefined) tr[k]=r[k]; tr.trail=(r.trail||[]).map(([x,y])=>({x,y})); if(tr.loads) updateLoadVis(tr); return true; }
 function snapshotState(){
   return { v:7, apv:2, base:BASE_NODES, layout:SITES.map(s=>s.plat), money, score, built, deliveries, crashes, won, gameMin, nextId, goalHit, incomeLog,
     nodes:nodes.slice(BASE_NODES).map(n=>[Math.round(n.x*10)/10,Math.round(n.y*10)/10]),
     edges:[...edges.values()].filter(e=>!e.internal).map(e=>[e.a,e.b,e.cost]), signals:[...signals], entry:[...entrySig], fan:[...fanPorts],
     sites:SITES.map(s=>({id:s.id,lvl:s.lvl,log:s.log,since:s.since,best:s.best,done:s.done,stock:s.stock,inbuf:s.inbuf,tm:s.tm})),
-    trains:trains.map(t=>({id:t.id,auto:t.auto,plats:t.plats,vias:t.vias,split:t.split||null,name:t.name,color:t.color,consist:t.consist,route:t.route,start:t.start,every:t.every,waits:t.waits,earned:t.earned||0,ran:t.ran||0,bought:t.bought||0})), savedAt:new Date().toISOString() };
+    occ:[...occ], trains:trains.map(t=>({run:runState(t), id:t.id,auto:t.auto,plats:t.plats,vias:t.vias,split:t.split||null,name:t.name,color:t.color,consist:t.consist,route:t.route,start:t.start,every:t.every,waits:t.waits,earned:t.earned||0,ran:t.ran||0,bought:t.bought||0})), savedAt:new Date().toISOString() };
 }
 function clearWorld(){
   for(const t of trains) removeTrainMesh(t); trains=[]; occ.clear(); edges.clear(); adj.clear(); signals.clear(); entrySig.clear(); anchor=null; history.length=0; renderUndo(); netVer++;
@@ -3182,7 +3242,8 @@ function loadState(st){
   for(const [a,b,c] of st.edges||[]) if(nodes[a]&&nodes[b]) addEdge(a,b,c);
     for(const s of st.signals||[]) if(nodes[s]) signals.add(s); /* entry signals are no longer used */
   for(const x of st.sites||[]){ const s=site(x.id); if(!s) continue; Object.assign(s.stock,x.stock||{}); Object.assign(s.inbuf,x.inbuf||{}); s.tm=x.tm||{}; if(s.levels){ s.lvl=x.lvl||0; s.log=x.log||[]; s.since=x.since||0; s.best=x.best||0; s.got={}; s.done=!!x.done; } }
-  for(const t of st.trains||[]) if(t.route.every(id=>site(id))) makeTrain(t);
+  for(const t of st.trains||[]) if(t.route.every(id=>site(id))){ const tr=makeTrain(t); if(t.run && !restoreRun(tr,t.run)){ placeAt(tr,0); startLoading(tr); } }
+  occ.clear(); for(const [k,v] of st.occ||[]) if(edges.has(k) && trains.some(t=>t.id===v)) occ.set(k,v);
   nextId=Math.max(nextId,st.nextId||1);
   loadedAt=st.savedAt||'';
   consumers.forEach(refreshLabel); setMoney(money); addScore(0); rebuildTracks(); renderNeeds(); ready=was; return true;
@@ -3191,7 +3252,7 @@ function loadState(st){
 let loadedAt='', synced=false; setTimeout(()=>{ synced=true; },15000);   // nothing is written until the account copy has been compared
 const newer=st=>!!st && (st.savedAt||'')>loadedAt;
 function dirty(){ if(!ready) return; clearTimeout(saveTimer); saveTimer=setTimeout(save,2500); }
-setInterval(()=>dirty(),20000);
+setInterval(()=>dirty(),180000);   // the account copy every 3 minutes (and whenever the app is left)
 // the phone copy is cheap: keep it fresh every few seconds so closing the app never loses earnings
 function saveLocal(){ if(!ready || !synced) return; try{ const st=snapshotState(); localStorage.setItem(SAVE_KEY,JSON.stringify(st)); loadedAt=st.savedAt; }catch(e){} }
 setInterval(saveLocal,5000);
@@ -3290,7 +3351,6 @@ let fsWanted=true; try{ fsWanted=localStorage.getItem('zi-fs3')!=='0'; }catch(e)
 // Full screen hides the phone's system bars. Swiping in from an edge to get them back leaves full screen for a while,
 // so the bars stay up long enough to use; the next tap in the game after that goes back to full screen.
 let fsPauseUntil=0;
-window.addEventListener('pointerdown',e=>{ if(!document.fullscreenElement) return; const m=24; if(e.clientY>=innerHeight-m || e.clientY<=m*0.7 || e.clientX<=m*0.6 || e.clientX>=innerWidth-m*0.6){ fsPauseUntil=performance.now()+12000; document.exitFullscreen().catch(()=>{}); } },true);
 cv.addEventListener('pointerdown',()=>{ if(fsWanted && menuStarted && !document.fullscreenElement && performance.now()>fsPauseUntil) goFullscreen(); });
 const hasProgress=()=>trains.length>0 || [...edges.values()].some(e=>!e.internal);
 function goFullscreen(){ const el=document.documentElement; if(!fsWanted || document.fullscreenElement || !el.requestFullscreen) return lockLand();
@@ -3492,9 +3552,11 @@ function sndHorn(x,y,two){ const out=placed(x,y,0.5); if(!out) return; const ctx
   [[0,0.55,370],[two?0.6:-1,0.5,311]].forEach(([at,len,f])=>{ if(at<0) return; for(const m of [1,1.5]){ const o=ctx.createOscillator(); o.type='sawtooth'; o.frequency.value=f*m; const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=1800; const g=envGain(at,0.18/m,0.03,len); o.connect(lp); lp.connect(g); g.connect(out); o.start(ctx.currentTime+at); o.stop(ctx.currentTime+at+len+0.1); } }); }
 function sndCarHorn(x,y){ const out=placed(x,y,0.35); if(!out) return; const ctx=SND.ctx, f=380+Math.random()*120, len=0.12+Math.random()*0.35, n=Math.random()<0.4?2:1;
   for(let k=0;k<n;k++) for(const m of [1,1.26]){ const o=ctx.createOscillator(); o.type='square'; o.frequency.value=f*m; const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=2200; const g=envGain(k*(len+0.08),0.08,0.01,len); o.connect(lp); lp.connect(g); g.connect(out); o.start(ctx.currentTime+k*(len+0.08)); o.stop(ctx.currentTime+k*(len+0.08)+len+0.05); } }
-function sndSqueal(x,y){ const out=placed(x,y,0.45); if(!out) return; const ctx=SND.ctx, o=ctx.createOscillator(), o2=ctx.createOscillator(), lfo=ctx.createOscillator(), lg=ctx.createGain();
-  o.type='sine'; o.frequency.value=3150; o2.type='sine'; o2.frequency.value=4410; lfo.frequency.value=7; lg.gain.value=60; lfo.connect(lg); lg.connect(o.frequency); lg.connect(o2.frequency);
-  const g=envGain(0,0.09,0.25,2.2), g2=envGain(0.3,0.05,0.3,1.6); o.connect(g); o2.connect(g2); g.connect(out); g2.connect(out); [o,o2,lfo].forEach(z=>{ z.start(); z.stop(ctx.currentTime+3); }); }
+function sndSqueal(){}   // brakes stay quiet: the old squeal sounded like a burst steam pipe
+// the dispatcher's whistle before a train leaves: short, soft, with the pea's trill
+function sndWhistle(x,y){ const out=placed(x,y,0.18); if(!out) return; const ctx=SND.ctx, o=ctx.createOscillator(), lfo=ctx.createOscillator(), lg=ctx.createGain(), am=ctx.createGain();
+  o.type='sine'; o.frequency.value=2500; lfo.type='sine'; lfo.frequency.value=28; lg.gain.value=0.35; lfo.connect(lg); am.gain.value=0.65; lg.connect(am.gain);
+  const g=envGain(0,0.035,0.02,0.42); o.connect(am); am.connect(g); g.connect(out); for(const z of [o,lfo]){ z.start(); z.stop(ctx.currentTime+0.5); } }
 function sndWrench(x,y){ const out=placed(x,y,0.6); if(!out) return; const ctx=SND.ctx, s=ctx.createBufferSource(); s.buffer=SND.white; const f=ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value=2400; f.Q.value=3;
   const am=ctx.createGain(); am.gain.value=0; const lfo=ctx.createOscillator(); lfo.type='square'; lfo.frequency.value=22+Math.random()*8; const lg=ctx.createGain(); lg.gain.value=0.5; lfo.connect(lg); lg.connect(am.gain);
   const len=0.35+Math.random()*0.7, g=envGain(0,0.5,0.02,len); s.connect(f); f.connect(am); am.connect(g); g.connect(out); s.start(ctx.currentTime,Math.random()*2,len+0.2); lfo.start(); lfo.stop(ctx.currentTime+len+0.2); }
@@ -3526,7 +3588,7 @@ function frameBody(now){
   const dt=menuEl.hidden ? real*SPEEDS[speedIdx] : 0; const n=Math.ceil(dt/0.25); for(let i=0;i<n;i++) step(dt/n);
   renderClock(); applyDaylight(); if(tool==='route' && rStops.length>1 && Math.abs(camD/routeZoom-1)>0.25) renderRoute();
   for(const tr of trains) placeTrain(tr,now,real);
-  planeTick(real);
+  planeTick(real); peopleTick(real);
   for(const [id,o] of signalMeshes){ const red=trains.some(t=>t.st==='hold'&&t.path&&t.path[t.pi]===id) || (entrySig.has(id) && [...(adj.get(id)||[])].some(x=>{ const po=portOf.get(x); return po && trainsAt(po.s.node).some(t=>t.plat===po.k); })) || [...(adj.get(id)||[])].some(x=>occ.has(ekey(id,x))); o.l1.material=red?LIGHT_OFF:LIGHT_G; o.l2.material=red?LIGHT_R:LIGHT_OFF; }
   if(tool==='track' && anchor!=null){ const nd=anchorPos(); ring.visible=true; ring.position.set(nd.x-CX,3,nd.y-CZ); const s=1+Math.sin(now/180)*0.12; ring.scale.set(s,s,s); } else ring.visible=false;
   const k=Math.max(0.35,camD/620); for(const sp of labelOf.values()) sp.scale.set(112*k,32.8*k,1); for(const sp of parkLabels) sp.scale.set(84*k,15.8*k,1);
