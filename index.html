@@ -1340,13 +1340,16 @@ function conflictHtml(c){
 /* ================= trains ================= */
 const OFFS = i => i===0 ? 0 : 12.6+(i-1)*11.6;
 const stopNode=(tr,i)=>site(tr.route[i]).node;
-const trainsAt=node=>trains.filter(o=>(o.at===node && (o.st==='dwell'||o.st==='ready'||o.st==='notrack')) || (o.st==='hold' && o.path && o.pi===0 && o.path[0]===node && o.plat>=0));
-function freePlat(node,except){ const s=nodeSite.get(node), used=new Set(trainsAt(node).filter(o=>o!==except).map(o=>o.plat)); for(let k=0;k<s.plat;k++) if(!used.has(k)) return k; return -1; }
+const trainsAt=node=>trains.filter(o=>(o.at===node && (o.st==='dwell'||o.st==='ready'||o.st==='notrack')) || (o.st==='hold' && o.path && o.pi===0 && o.path[0]===node && o.plat>=0) || leaving(o,node));
+// a departing train keeps its platform track until its last wagon is out of the station
+const leaving=(o,node)=> o._dep && o._dep.node===node && (o.st==='run'||o.st==='hold') && (o.odo||0)-o._dep.odo < trainLen(o)+30;
+const platOf=(o,node)=> leaving(o,node) ? o._dep.k : o.plat;
+function freePlat(node,except){ const s=nodeSite.get(node), used=new Set(trainsAt(node).filter(o=>o!==except).map(o=>platOf(o,node))); for(let k=0;k<s.plat;k++) if(!used.has(k)) return k; return -1; }
 const stationFull=(node,tr)=>trainsAt(node).filter(o=>o!==tr).length >= nodeSite.get(node).plat;
 // A train stands on the platform track it will leave by, and enters only the track its line leads to.
 const stationBlock = s => s.ports.map(q=>ekey(s.node,q));
 function occupiedInto(dest,tr){ const d=nodeSite.get(dest), out=[]; if(!d) return out;
-  if(tr && tr._wantK!=null && tr._wantK<d.plat){ for(let k=0;k<d.plat;k++) if(k!==tr._wantK) for(const dd of [0,1]) out.push(ekey(d.side[dd][k],dest)); return out; } const used=new Set(trainsAt(dest).filter(o=>o!==tr).map(o=>o.plat));
+  if(tr && tr._wantK!=null && tr._wantK<d.plat){ for(let k=0;k<d.plat;k++) if(k!==tr._wantK) for(const dd of [0,1]) out.push(ekey(d.side[dd][k],dest)); return out; } const used=new Set(trainsAt(dest).filter(o=>o!==tr).map(o=>platOf(o,dest)));
   for(const o of trains){ if(o===tr) continue; if(o._pass && o._pass.node===dest) used.add(o._pass.k); if(o._arrGrant!==dest || !o.path || o.path[o.path.length-1]!==dest) continue; const q=portOf.get(o.path[o.path.length-2]); if(q) used.add(q.k); }   // trains already promised a track there
   for(let k=0;k<d.plat;k++) if(used.has(k)) for(const dd of [0,1]) out.push(ekey(d.side[dd][k],dest)); return out; }
 function routeFromPlat(s,k,to,tr){ const own=s.ports.filter(q=>portOf.get(q).k!==k).map(q=>ekey(s.node,q));
@@ -1360,7 +1363,7 @@ function pathWithVias(tr,from,to,vias){ const targets=[...((vias||[]).filter(v=>
     if(!seg) return i>0 ? (routePath(from,to,null) ) : null;
     full = full ? full.concat(seg.slice(1)) : seg; prv=full.length>1?full[full.length-2]:null; cur=tg; }
   return full; }
-function choosePlat(tr,node,to){ const s=nodeSite.get(node), used=new Set(trainsAt(node).filter(o=>o!==tr).map(o=>o.plat));
+function choosePlat(tr,node,to){ const s=nodeSite.get(node), used=new Set(trainsAt(node).filter(o=>o!==tr).map(o=>platOf(o,node)));
   if(to!=null){ for(let k=0;k<s.plat;k++) if(!used.has(k) && routeFromPlat(s,k,to,tr)) return k; for(let k=0;k<s.plat;k++) if(routeFromPlat(s,k,to,tr)) return k; }
   return freePlat(node,tr); }
 function placeAt(tr,i){ tr.stopIdx=i; tr.at=stopNode(tr,i); tr.plat=choosePlat(tr,tr.at,tr.route.length>1?stopNode(tr,(i+1)%tr.route.length):null); tr.path=null; tr.pi=0; tr.t=0; tr.trail=[]; }
@@ -1382,10 +1385,14 @@ function releaseTrain(tr){ for(const [k,v] of [...occ]) if(v===tr.id) occ.delete
 // a track is free only once the LAST wagon has left it, not when the locomotive does
 function releaseTail(tr){ const q=tr.relq; while(q && q.length && q[0].d<=(tr.odo||0)){ const k=q.shift().k; if(occ.get(k)===tr.id) occ.delete(k); } }
 const underTrain=(o,k)=> curEdge(o)===k || (o.relq||[]).some(x=>x.k===k);
+// a leg without its own via points goes back the way the train came: the opposite leg's via points, reversed
+function mirrorVias(route,vias,i){ const n=route.length, v=(vias||[])[i%n]; if(v && v.length) return v; const a=route[i%n], b=route[(i+1)%n];
+  for(let j=0;j<n;j++){ if(j===i%n) continue; if(route[j]===b && route[(j+1)%n]===a){ const w=(vias||[])[j]; if(w && w.length) return w.slice().reverse(); } } return v||[]; }
+const legVias=(tr,i)=>mirrorVias(tr.route,tr.vias,i);
 function depart(tr){
   const n=tr.route.length, next=(tr.stopIdx+1)%n, from=tr.at, to=stopNode(tr,next);
   tr._wantK=(tr.plats||[])[next]; if(tr._wantK===undefined) tr._wantK=null;
-  const path=pathWithVias(tr,from,to,(tr.vias||[])[tr.stopIdx]);
+  const path=pathWithVias(tr,from,to,legVias(tr,tr.stopIdx));
   if(!path){ tr.st='notrack'; tr.check=5; const sn=site(tr.route[tr.stopIdx]).name, tn=site(tr.route[next]).name, kk=(tr._noTrackK??-1)+1;
     tr.why = kk>0 && nodeSite.get(from).plat>1 ? L(`z koleje ${kk} v ${sn} nevede trať do ${tn} – připoj tu kolej nebo postav výhybku`,`no line from track ${kk} at ${sn} to ${tn} – connect that track or build a switch`,`von Gleis ${kk} in ${sn} führt keine Strecke nach ${tn} – Gleis anschließen oder Weiche bauen`) : L('chybí trať','no track','kein Gleis')+' → '+tn; tr._noTrackK=null; return; }
   if(tr.stopIdx===0) tr.cycleBase=tr.plannedDep;
@@ -1398,8 +1405,12 @@ function depart(tr){
   { const own=new Set(); for(let i=0;i<path.length-1;i++) own.add(ekey(path[i],path[i+1])); tr.relq=(tr.relq||[]).filter(x=>{ if(own.has(x.k)){ if(occ.get(x.k)===tr.id) occ.delete(x.k); return false; } return true; }); }
   if(tryEnter(tr)) tr.st='run'; else { tr.st='hold'; tr.check=1; }
 }
-function blockFrom(p,i){ const es=[], ns=[]; let j=i;
-  for(; j<p.length-1; j++){ es.push(ekey(p[j],p[j+1])); const m=p[j+1]; if(signals.has(m)||isStationNode(m)||j+1===p.length-1) break; ns.push(m); }
+function blockFrom(p,i,need){ const es=[], ns=[]; let j=i, len=0;
+  for(; j<p.length-1; j++){ es.push(ekey(p[j],p[j+1])); len+=dist(p[j],p[j+1]); const m=p[j+1];
+    if(isStationNode(m)||j+1===p.length-1) break;
+    // a signal too close for the whole train to wait behind it (clear of the last switch) is passed as one block
+    if(signals.has(m) && !(need && len<need && !portOf.has(m))) break;
+    ns.push(m); if(deg(m)>=3 && !portOf.has(m)) len=0; }
   return {edges:es, nodes:ns, end:p[Math.min(p.length-1,j+1)]}; }
 const curEdge = o => (o.path && o.pi<o.path.length-1) ? ekey(o.path[o.pi],o.path[o.pi+1]) : null;
 function stoppedNode(o){ if(o.st==='hold' && o.path) return o.path[o.pi]; if(o.st==='wreck') return o.wreckNode; return null; }
@@ -1414,36 +1425,97 @@ function blockBusy(b,tr){
   if(!isStationNode(b.end)){ const inBlk=new Set(b.edges);
     for(const x of adj.get(b.end)||[]){ const k=ekey(b.end,x); if(inBlk.has(k)) continue;
       for(const o of trains){ if(o===tr || !o.path || (o.st!=='run' && o.st!=='hold')) continue; const j=o.path.indexOf(b.end, o.pi); if(j<0) continue;
+        // only a train that will actually come on into our block, head-on, stops us here; one heading off to another branch does not
+        const back=b.edges.length ? b.edges[b.edges.length-1] : null; if(!back || o.path[j+1]==null || ekey(b.end,o.path[j+1])!==back) continue;
         if(occ.get(k)===o.id || curEdge(o)===k) return true; } } }
   const es=new Set(b.edges), ns=new Set(b.nodes); if(!isStationNode(b.end)) ns.add(b.end);
-  for(const o of trains){ if(o===tr) continue; if((o.relq||[]).some(x=>es.has(x.k))) return true; if((o.st==='run'||o.st==='hold') && es.has(curEdge(o))) return true; const sn=stoppedNode(o); if(sn!=null && ns.has(sn)) return true; }
+  for(const o of trains){ if(o===tr) continue; if((o.relq||[]).some(x=>es.has(x.k))) return true; if((o.st==='run'||(o.st==='hold' && !(o.pi===0 && nodeSite.has(o.path[0])))) && es.has(curEdge(o))) return true; /* a train still standing at its platform has not entered yet */ const sn=stoppedNode(o); if(sn!=null && ns.has(sn)) return true; }
   return false;
 }
 function arrivalFree(tr,n,dest){ const s=nodeSite.get(n), bad=new Set(occupiedInto(dest,tr)); if(s && tr.plat>=0) s.ports.forEach(q=>{ if(portOf.get(q).k!==tr.plat) bad.add(ekey(n,q)); });
   const r=routePath(n,dest,bad); if(!r) return null; for(let i=0;i<r.length-1;i++) if(bad.has(ekey(r[i],r[i+1]))) return null; return r; }
 const ownStart=(tr,q)=>{ if(!q || q.length<2 || tr.plat<0 || !nodeSite.has(q[0])) return true; const po=portOf.get(q[1]); return !!po && po.k===tr.plat; };
-function tracksUsed(S,tr){ const used=new Set(trainsAt(S).filter(o=>o!==tr).map(o=>o.plat));
+function tracksUsed(S,tr){ const used=new Set(trainsAt(S).filter(o=>o!==tr).map(o=>platOf(o,S)));
   for(const o of trains){ if(o===tr || !o.path) continue; if(o._arrGrant===S && o.path[o.path.length-1]===S){ const q=portOf.get(o.path[o.path.length-2]); if(q) used.add(q.k); } if(o._pass && o._pass.node===S) used.add(o._pass.k); }
   return used; }
 // platform tracks other trains stand on or have been promised: a detour must not run through them
 function platAvoid(tr,set){ for(const st of SITES){ const used=tracksUsed(st.node,tr); for(const k of used) for(const dd of [0,1]) set.add(ekey(st.side[dd][k],st.node)); } return set; }
 // the station this block runs through must have the track the path uses free (and keep it promised to us)
-function passFree(tr,p){ const S=blockFrom(p,tr.pi).end, dest=p[p.length-1], j=p.indexOf(S,tr.pi+1); if(S===dest || !nodeSite.has(S) || j<1) return true;
+function passFree(tr,p){ const S=blockFrom(p,tr.pi,trainLen(tr)+8).end, dest=p[p.length-1], j=p.indexOf(S,tr.pi+1); if(S===dest || !nodeSite.has(S) || j<1) return true;
   const q=portOf.get(p[j-1]); if(!q) return true; if(tr._pass && tr._pass.node===S && tr._pass.k===q.k) return true;
   if(tracksUsed(S,tr).has(q.k)) return false; tr._pass={node:S,k:q.k}; return true; }
+// Stretches: plain track between two "places" (stations, junctions, line ends). A stretch with a twin
+// between the same two places is a passing loop; any other is single track where trains cannot pass.
+let strVer=-1, strOf=new Map(), strList=[];
+function stretches(){ if(strVer===netVer) return; strVer=netVer; strOf=new Map(); strList=[];
+  const place=n=> nodeSite.has(n) || portOf.has(n) || deg(n)!==2;
+  for(const e of edges.values()){ if(e.internal) continue; const k0=ekey(e.a,e.b); if(strOf.has(k0)) continue;
+    const S={id:strList.length, edges:new Set([k0]), ends:[]}; strList.push(S); strOf.set(k0,S.id);
+    for(const [start,from] of [[e.a,e.b],[e.b,e.a]]){ let u=start, p=from; for(let g=0; g<5000 && !place(u); g++){ const nx=[...adj.get(u)].find(x=>x!==p); if(nx==null) break; const k=ekey(u,nx); if(edges.get(k)?.internal) break; S.edges.add(k); strOf.set(k,S.id); p=u; u=nx; } S.ends.push(portOf.has(u)?portOf.get(u).s.node:u); } }
+  const byEnds=new Map(); for(const S of strList){ const key=S.ends.slice().sort((a,b)=>a-b).join('-'); byEnds.set(key,(byEnds.get(key)||0)+1); S.key=key; }
+  for(const S of strList) S.single = byEnds.get(S.key)<2 || S.ends[0]===S.ends[1]; }
+// is another train already coming the other way through this single-track stretch?
+function oppositeIn(tr,S,dirFrom){ for(const o of trains){ if(o===tr || !o.path || (o.st!=='run' && o.st!=='hold')) continue;
+    // only a train already inside the stretch (on it or holding a reservation there) counts
+    if(!inStretch(o,S.id)) continue;
+    for(let i=Math.max(0,o.pi);i<o.path.length-1;i++){ const u=o.path[i], v=o.path[i+1], k=ekey(u,v); if(strOf.get(k)!==S.id) continue;
+      if(dirFrom.has(k) && dirFrom.get(k)===v) return o; break; } }
+  return null; }
+// a train is "inside" a stretch when it runs on it or has reserved track ahead in it (its tail does not count)
+function inStretch(o,sid){ if(!o.path || (o.st!=='run'&&o.st!=='hold')) return false; if(strOf.get(curEdge(o))===sid) return true;
+  const tail=new Set((o.relq||[]).map(x=>x.k)); for(const [k,v] of occ) if(v===o.id && !tail.has(k) && strOf.get(k)===sid) return true; return false; }
+function strLen(S){ if(S.len==null){ S.len=0; for(const k of S.edges){ const e=edges.get(k); if(e) S.len+=e.len; } } return S.len; }
+function insideOf(sid){ return trains.filter(o=>inStretch(o,sid)); }
+function behindStretch(tr,p){ const n=p[tr.pi]; if(tr.pi>0) return strOf.get(ekey(p[tr.pi-1],n)); const ahead=p.length>1?ekey(n,p[tr.pi+1]):null;
+  const rq=(tr.relq||[]).map(x=>x.k).reverse(); for(const k of rq){ const [a,b]=k.split('|').map(Number); if((a===n||b===n) && k!==ahead) return strOf.get(k); }
+  for(const [k,v] of occ){ if(v!==tr.id || k===ahead) continue; const [a,b]=k.split('|').map(Number); if(a===n||b===n) return strOf.get(k); } return null; }
+function nextStretch(o,sid){ let seen=false; for(let i=Math.max(0,o.pi);i<o.path.length-1;i++){ const x=strOf.get(ekey(o.path[i],o.path[i+1])); if(x===sid){ seen=true; continue; } if(x==null){ if(nodeSite.has(o.path[i+1])) return 'st'; continue; } if(seen || i>o.pi) return x; } return null; }
+function stretchBlock(tr,p){ const n=p[tr.pi]; tr._sbAvoid=null;
+  stretches(); const cur=behindStretch(tr,p); let last=cur, cnt=0;
+      for(let i=tr.pi;i<p.length-1;i++){ const k=ekey(p[i],p[i+1]), sid=strOf.get(k); if(sid==null){ if(i>tr.pi && nodeSite.has(p[i+1])) break; continue; }
+        if(sid===last) continue; const prevSid=last; last=sid; if(++cnt>10) break; const S=strList[sid];
+        const dirFrom=new Map(); let j=i; for(; j<p.length-1; j++){ const kk=ekey(p[j],p[j+1]); if(strOf.get(kk)!==sid) break; dirFrom.set(kk,p[j]); }
+        if(S.single){ let o=oppositeIn(tr,S,dirFrom);
+          if(!o && tr.pi===0 && nodeSite.has(n)){ // a train still in a station lets the trains waiting out on the line go first
+            for(const w of trains){ if(w===tr || w.st!=='hold' || !w.path || w._needTrack || (w.pi===0 && nodeSite.has(w.path[0]))) continue;
+              for(let ii=w.pi; ii<w.path.length-1; ii++){ const kk=ekey(w.path[ii],w.path[ii+1]), x=strOf.get(kk); if(x==null) continue; if(x===sid){ if(dirFrom.get(kk)===w.path[ii+1]) o=w; } if(x!==behindStretch(w,w.path)) break; }
+              if(o) break; } }
+          if(o){ tr._sbAvoid=[...S.edges]; return L(`čeká – proti němu jede ${o.name}`,`waiting – ${o.name} is coming the other way`,`wartet – ${o.name} kommt entgegen`); } continue; }
+        { const o=oppositeIn(tr,S,dirFrom);
+          // further ahead, a loop track with a train coming the other way is fine as long as its twin is clear: the route switches there
+          const twinFree = cnt>1 && strList.some(X=>X.key===S.key && X.id!==sid && !insideOf(X.id).some(w=>w!==tr && nextStretch(w,X.id)===prevSid));
+          if(o && !twinFree){ tr._sbAvoid=[...S.edges]; } if(o && !twinFree)return L(`čeká – proti němu jede ${o.name}`,`waiting – ${o.name} is coming the other way`,`wartet – ${o.name} kommt entgegen`); }
+        // a passing loop: never fill it so that a train waiting on the far side has no track left to pass
+        const J=p[j], par=strList.filter(X=>X.key===S.key).map(X=>X.id), parSet=new Set(par); let opp=0;
+        for(const Y of strList){ if(parSet.has(Y.id) || !Y.ends.includes(J)) continue; for(const o of insideOf(Y.id)) if(o!==tr && parSet.has(nextStretch(o,Y.id))) opp++; }
+        if(opp){ let free=0; for(const x of par){ if(x===sid) continue; const ins=insideOf(x).filter(o=>o!==tr); if(!ins.length || ins.every(o=>nextStretch(o,x)===prevSid)) free++; }
+          if(free<opp)return L('čeká – výhybna je plná, nechává projet protijedoucí vlak','waiting – the passing loop is full, letting the other train through','wartet – die Ausweiche ist voll, lässt den Gegenzug durch'); }
+        if(strLen(S)>=trainLen(tr)+10) break; }   // a loop track the whole train fits on is a safe place to wait 
+  return null; }
+// alternative routes from where the train stands; at a station it must leave by its own platform track
+function altRoute(tr,n,dest,avoid,prev){ const av=platAvoid(tr,new Set(avoid||[])); if(tr.pi===0 && nodeSite.has(n) && tr.plat>=0) nodeSite.get(n).ports.forEach(q=>{ if(portOf.get(q).k!==tr.plat) av.add(ekey(n,q)); });
+  const r=routePath(n,dest,av,prev); if(!r) return null; if(tr.pi===0 && nodeSite.has(n) && tr.plat>=0 && r.length>1 && portOf.get(r[1])?.k!==tr.plat) return null; return r; }
+// With a passing loop on the way the track in the destination is asked for only when leaving the loop (the train waits there,
+// out of everybody's way); without one it must be free before the train sets off.
+// Is there a passing loop on the way where this train can wait (out of everybody's way) before its destination?
+function safeBefore(tr,p,from){ stretches(); const cur=behindStretch(tr,p); let last=cur;
+  for(let i=from;i<p.length-1;i++){ const sid=strOf.get(ekey(p[i],p[i+1])); if(sid==null || sid===last) continue; last=sid; const S=strList[sid];
+    if(!S.single && strLen(S)>=trainLen(tr)+10) return true; }
+  return false; }
+const atSafePlace=(tr,p)=>{ if(tr.pi===0 && nodeSite.has(p[0])) return true; stretches(); const c=behindStretch(tr,p); return c!=null && !strList[c].single; };
 function tryEnter(tr){
   let p=tr.path; const n=p[tr.pi], dest=p[p.length-1];
   if(tr._pass && p.indexOf(tr._pass.node,tr.pi)<0) tr._pass=null;
-  { const S=blockFrom(p,tr.pi).end, j=p.indexOf(S,tr.pi+1);   // running through a station on the way
+  { const S=blockFrom(p,tr.pi,trainLen(tr)+8).end, j=p.indexOf(S,tr.pi+1);   // running through a station on the way
     if(S!==dest && nodeSite.has(S) && j>0 && !(tr._pass && tr._pass.node===S)){ const q=portOf.get(p[j-1]);
       if(q && tracksUsed(S,tr).has(q.k)){ const used=tracksUsed(S,tr), st=nodeSite.get(S), av=new Set(); for(const k of used) for(const dd of [0,1]) av.add(ekey(st.side[dd][k],S));
         const alt=routePath(n,dest,av,tr.pi>0?p[tr.pi-1]:null), ja=alt?alt.indexOf(S):-1, qa=ja>0?portOf.get(alt[ja-1]):null;
         if(alt && qa && !used.has(qa.k) && ownStart(tr,alt) && pathLen(alt)<=pathLen(p.slice(tr.pi))*1.3+80){ tr.path=p=alt; tr.pi=0; tr._pass={node:S,k:qa.k}; } }
       if(q && !(tr._pass && tr._pass.node===S) && tracksUsed(S,tr).has(q.k)){ tr.why=L(`čeká – v ${nodeSite.get(S).name} je kolej ${q.k+1} obsazená`,`waiting – track ${q.k+1} at ${nodeSite.get(S).name} is occupied`,`wartet – Gleis ${q.k+1} in ${nodeSite.get(S).name} ist belegt`); return false; }
       if(q && !(tr._pass && tr._pass.node===S)) tr._pass={node:S,k:q.k}; } }
-  if(tr.pi===0 && isStationNode(n) && nodeSite.has(dest) && dest!==n){ const vias=(tr.vias||[])[tr.stopIdx]||[];
-    if(!vias.length){ const r=arrivalFree(tr,n,dest); if(!r){ const dn=nodeSite.get(dest).name; tr.why=L(`čeká – v ${dn} není volná kolej (postav další kolej nebo výhybku)`,`waiting – no free track at ${dn} (add a track or a switch)`,`wartet – in ${dn} ist kein Gleis frei (Gleis oder Weiche bauen)`); return false; }
-      if(pathLen(r)<=pathLen(p)*1.3+60){ tr.path=p=r; } tr._arrGrant=dest; } }
+  if(tr.pi===0 && isStationNode(n) && nodeSite.has(dest) && dest!==n){ const vias=legVias(tr,tr.stopIdx);
+    if(!vias.length && !safeBefore(tr,p,tr.pi)){ const r=arrivalFree(tr,n,dest); if(!r){ const dn=nodeSite.get(dest).name; tr.why=L(`čeká – v ${dn} není volná kolej (postav další kolej nebo výhybku)`,`waiting – no free track at ${dn} (add a track or a switch)`,`wartet – in ${dn} ist kein Gleis frei (Gleis oder Weiche bauen)`); return false; }
+      if(r){ if(pathLen(r)<=pathLen(p)*1.3+60){ tr.path=p=r; } tr._arrGrant=dest; } } }
   if(!edges.has(ekey(n,p[tr.pi+1]))){ const np=routePath(n,dest); if(!np || np.length<2){ tr.why=L('chybí trať','no track','kein Gleis'); return false; } tr.path=p=np; tr.pi=0; }
   const nx=p[tr.pi+1];
   if(entrySig.has(n)){ let j=tr.pi+1; while(j<p.length-1 && portOf.has(p[j]) && portOf.has(p[j+1])) j++; const po=portOf.get(p[j]); if(po && p[j+1]===po.s.node){ const platBusy=(k,pt)=>trainsAt(po.s.node).some(o=>o!==tr && o.plat===k) || trains.some(o=>{ if(o===tr || o.st!=='run' || !o.path || o.path[o.path.length-2]!==pt) return false; const iN=o.path.indexOf(n); return iN>=0 && iN<o.pi; });
@@ -1458,24 +1530,29 @@ function tryEnter(tr){
     if(opp.size){ const alt=routePath(n,dest,platAvoid(tr,new Set(opp)),tr.pi>0?p[tr.pi-1]:null);
       const oc=q=>{ let c=0; for(let i=0;i<q.length-1;i++) if(opp.has(ekey(q[i],q[i+1]))) c++; return c; };
       if(alt && alt.length>1 && ownStart(tr,alt) && pathLen(alt)<=pathLen(p.slice(tr.pi))*1.3+60 && oc(alt)<oc(p.slice(tr.pi))){ tr.path=p=alt; tr.pi=0; } }
-    if(!isStationNode(n) && nodeSite.has(dest) && blockFrom(p,tr.pi).end===dest){
+    if(!isStationNode(n) && nodeSite.has(dest) && tr._arrGrant!==dest && (blockFrom(p,tr.pi,trainLen(tr)+8).end===dest || (atSafePlace(tr,p) && !safeBefore(tr,p,tr.pi)))){
       const bad=new Set(occupiedInto(dest,tr)); const r=routePath(n,dest,bad,tr.pi>0?p[tr.pi-1]:null); let ok=!!r; if(r) for(let i=0;i<r.length-1;i++) if(bad.has(ekey(r[i],r[i+1]))){ ok=false; break; }
-      if(!ok){ tr.why=L(`čeká u návěstidla – v ${nodeSite.get(dest).name} není volná kolej`,`waiting at the signal – no free track at ${nodeSite.get(dest).name}`,`wartet am Signal – in ${nodeSite.get(dest).name} ist kein Gleis frei`); return false; }
+      if(!ok){ tr._needTrack=true; tr.why=L(`čeká u návěstidla – v ${nodeSite.get(dest).name} není volná kolej`,`waiting at the signal – no free track at ${nodeSite.get(dest).name}`,`wartet am Signal – in ${nodeSite.get(dest).name} ist kein Gleis frei`); return false; }
       if(r.join()!==p.slice(tr.pi).join() && pathLen(r)<=pathLen(p.slice(tr.pi))*1.4+80){ tr.path=p=r; tr.pi=0; } tr._arrGrant=dest; }
-    let blk=blockFrom(p,tr.pi);
+    let blk=blockFrom(p,tr.pi,trainLen(tr)+8);
+    // single track: never into a stretch a train is already running along the other way; never fill a passing loop it needs
+    if(isStationNode(n) || occ.get(ekey(n,p[tr.pi+1]))!==tr.id || !(tr.relq||[]).length){ let why=stretchBlock(tr,p);
+      if(why && tr._sbAvoid){ const alt=altRoute(tr,n,dest,tr._sbAvoid,tr.pi>0?p[tr.pi-1]:null);
+        if(alt && alt.length>1 && !alt.some((x,i)=>i<alt.length-1 && tr._sbAvoid.includes(ekey(x,alt[i+1]))) && pathLen(alt)<=pathLen(p.slice(tr.pi))*1.4+80){ const sp=tr.path, spi=tr.pi; tr.path=alt; tr.pi=0; const w2=stretchBlock(tr,alt); if(w2){ tr.path=sp; tr.pi=spi; } else { p=alt; blk=blockFrom(p,0,trainLen(tr)+8); why=null; } } }
+      if(why){ tr.why=why; return false; } }
     if(blockBusy(blk,tr)){
       const busy=new Set(); for(const [k,v] of occ) if(v!==tr.id) busy.add(k); for(const o of trains) if(o!==tr && o.st==='run'){ const k=curEdge(o); if(k) busy.add(k); }
       platAvoid(tr,busy); let alt=routePath(n,dest,busy,tr.pi>0?p[tr.pi-1]:null); if(alt && (pathLen(alt)>pathLen(p.slice(tr.pi))*1.25+40 || !ownStart(tr,alt))) alt=null;   // only a real shortcut around the busy track, never circling
-      if(alt && alt.length>1){ const ab=blockFrom(alt,0); if(!blockBusy(ab,tr)){ tr.path=p=alt; tr.pi=0; blk=ab; } else { tr.why=L('stojí u návěstidla','held at a signal','hält am Signal'); return false; } }
+      if(alt && alt.length>1){ const ab=blockFrom(alt,0,trainLen(tr)+8), sv=tr.pi; tr.pi=0; const sb=stretchBlock(tr,alt); tr.pi=sv; if(!blockBusy(ab,tr) && !sb){ tr.path=p=alt; tr.pi=0; blk=ab; } else { tr.why=L('stojí u návěstidla','held at a signal','hält am Signal'); return false; } }
       else { tr.why=L('stojí u návěstidla','held at a signal','hält am Signal'); return false; }
     }
-    if(!passFree(tr,p)){ const S=blockFrom(p,tr.pi).end; tr.why=L(`čeká – v ${nodeSite.get(S).name} není volná kolej pro průjezd`,`waiting – no free track to pass through ${nodeSite.get(S).name}`,`wartet – in ${nodeSite.get(S).name} ist kein Gleis für die Durchfahrt frei`); return false; }
+    if(!passFree(tr,p)){ const S=blockFrom(p,tr.pi,trainLen(tr)+8).end; tr.why=L(`čeká – v ${nodeSite.get(S).name} není volná kolej pro průjezd`,`waiting – no free track to pass through ${nodeSite.get(S).name}`,`wartet – in ${nodeSite.get(S).name} ist kein Gleis für die Durchfahrt frei`); return false; }
     blk.edges.forEach(k=>occ.set(k,tr.id));
   }
-  if(tr.pi===0 && isStationNode(n)) tr.plat=-1;
-  { const keep=new Set((tr.relq||[]).map(x=>x.k)); const bb=blockFrom(p,tr.pi); bb.edges.forEach(k=>keep.add(k)); if(tr.pi>0) keep.add(ekey(p[tr.pi-1],n));
+  if(tr.pi===0 && isStationNode(n)){ if(tr.plat>=0) tr._dep={node:n,k:tr.plat,odo:tr.odo||0}; tr.plat=-1; }
+  { const keep=new Set((tr.relq||[]).map(x=>x.k)); const bb=blockFrom(p,tr.pi,trainLen(tr)+8); bb.edges.forEach(k=>keep.add(k)); if(tr.pi>0) keep.add(ekey(p[tr.pi-1],n));
     for(const [k,v] of [...occ]) if(v===tr.id && !keep.has(k)) occ.delete(k); }
-  const B=nodes[p[tr.pi+1]], A=nodes[n]; tr.ang=Math.atan2(B.y-A.y,B.x-A.x); tr.why=''; return true;
+  const B=nodes[p[tr.pi+1]], A=nodes[n]; tr.ang=Math.atan2(B.y-A.y,B.x-A.x); tr.why=''; tr._needTrack=false; return true;
 }
 const trainLen = o => 12.6+o.consist.length*11.6;
 // distance from this train's front to the back of the train ahead on the same track (Infinity if none close)
@@ -1561,16 +1638,24 @@ function resetTrain(tr){ if(money<COST.resetTrain){ toast(L('Na vrácení vlaku 
   if(cardTrain===tr) showTrainCard(tr); dirty(); }
 function repairTrain(tr){ tr.wreckNode=null; placeAt(tr,0); startLoading(tr); tr.cycleBase=null;
   tr.parts.forEach(m=>m.rotation.set(0,0,0)); toast(L(`${tr.name} je opravený a čeká ve stanici ${site(tr.route[0]).name}.`,`${tr.name} is repaired and waiting at ${site(tr.route[0]).name}.`,`${tr.name} ist repariert und wartet in ${site(tr.route[0]).name}.`)); }
+// Dispatcher's last resort: a train out on the line that has not moved for 2 game hours goes back to the station it came from, free of charge.
+function unstick(){ for(const tr of trains){ if((tr.st!=='run' && tr.st!=='hold') || (tr.st==='hold' && tr.pi===0 && tr.path && nodeSite.has(tr.path[0]))){ tr._stuck=null; continue; }   // waiting inside a station blocks nobody
+    const od=Math.round((tr.odo||0)*10); if(!tr._stuck || tr._stuck.od!==od){ tr._stuck={od,t:gameMin}; continue; }
+    if(gameMin-tr._stuck.t<120) continue; tr._stuck=null; unstuckN++;
+    const back=tr.stopIdx>=0?tr.stopIdx:0; releaseTrain(tr); tr._arrGrant=null; tr._pass=null; tr.legStart=null; tr.legKm=0;
+    placeAt(tr,back); startLoading(tr); tr.cycleBase=null; if(cardTrain===tr) showTrainCard(tr);
+    toast(L(`Výpravčí vrátil zablokovaný vlak ${tr.name} do stanice ${site(tr.route[back]).name}, trať je zase volná.`,`The dispatcher sent the blocked train ${tr.name} back to ${site(tr.route[back]).name}; the line is clear again.`,`Der Fahrdienstleiter hat den blockierten Zug ${tr.name} nach ${site(tr.route[back]).name} zurückgeschickt.`),'',4500); dirty(); return; } }
+let unstickAcc=0, unstuckN=0;
 function step(dt){
-  gameMin+=dt; produce(dt);
+  gameMin+=dt; produce(dt); unstickAcc+=dt; if(unstickAcc>=5){ unstickAcc=0; unstick(); }
   for(const tr of trains){ if(tr.st==='dead') continue;
     switch(tr.st){
       case 'wreck': tr.wreckLeft-=dt; if(tr.wreckLeft<=0) repairTrain(tr); break;
       case 'dwell': tr.phaseLeft-=dt; if(tr.phaseLeft<=0) endPhase(tr); break;
       case 'ready': if(gameMin>=tr.depAt) depart(tr); break;
       case 'notrack': tr.check-=dt; if(tr.check<=0){ tr.st='ready'; tr.depAt=gameMin; } break;
-      case 'hold': tr.check-=dt; if(tr.check<=0){ tr.check=1; if(tryEnter(tr)) tr.st='run'; } break;
-      case 'run': move(tr,dt); break;
+      case 'hold': if(tr._holdT==null) tr._holdT=gameMin; tr.check-=dt; if(tr.check<=0){ tr.check=1; if(tryEnter(tr)) tr.st='run'; } break;
+      case 'run': tr._holdT=null; move(tr,dt); break;
     }
   }
 }
@@ -2777,7 +2862,7 @@ function drawLeg(path,m,off){ if(!path) return; const P=path.map((id,i)=>NP(path
     acc-=L; } }
 let routeZoom=0;
 function renderRoute(){ routeGroup.clear(); routeZoom=camD; const n=rStops.length;
-  const legPath=(i,j)=>{ const fake={_wantK:rPlats[j], plat:-1}; return pathWithVias(fake,site(rStops[i]).node,site(rStops[j]).node,rVias[i]); };
+  const legPath=(i,j)=>{ const fake={_wantK:rPlats[j], plat:-1}; return pathWithVias(fake,site(rStops[i]).node,site(rStops[j]).node,mirrorVias(rStops,rVias,i)); };
   for(const a of rVias) for(const v of a||[]){ const n=nodes[v]; const m=new T.Mesh(sph,RT_LIGHT); const k=Math.max(1,camD/450); m.position.set(n.x-CX,4,n.y-CZ); m.scale.set(3.2*k,1.2,3.2*k); m.renderOrder=17; routeGroup.add(m); }
   for(let i=0;i<n-1;i++) drawLeg(legPath(i,i+1), i===n-2?RT_LIGHT:RT_DARK, 2.4);
   if(n>=2) drawLeg(legPath(n-1,0), RT_DARK, 2.4);
@@ -2795,7 +2880,7 @@ function strictLeg(fromNode,k,vias,toNode,wantK){ const s=nodeSite.get(fromNode)
   const q=portOf.get(full[full.length-2]); return {path:full, k:q?q.k:null}; }
 // does the whole route work track by track, including the way back to the start?
 function routeCheck(stops,plats,vias){ const n=stops.length; if(n<2) return {ok:true};
-  const node=i=>site(stops[i%n]).node, want=i=>(plats||[])[i%n]??null, vv=i=>(vias||[])[i%n]||[];
+  const node=i=>site(stops[i%n]).node, want=i=>(plats||[])[i%n]??null, vv=i=>mirrorVias(stops,vias,i);
   const startKs = want(0)!=null ? [want(0)] : [...Array(site(stops[0]).plat).keys()];
   let lastFail=0;
   for(const k0 of startKs){ let k=k0, ok=true;
