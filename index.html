@@ -1511,7 +1511,7 @@ function tryEnter(tr){
       if(q && tracksUsed(S,tr).has(q.k)){ const used=tracksUsed(S,tr), st=nodeSite.get(S), av=new Set(); for(const k of used) for(const dd of [0,1]) av.add(ekey(st.side[dd][k],S));
         const alt=routePath(n,dest,av,tr.pi>0?p[tr.pi-1]:null), ja=alt?alt.indexOf(S):-1, qa=ja>0?portOf.get(alt[ja-1]):null;
         if(alt && qa && !used.has(qa.k) && ownStart(tr,alt) && pathLen(alt)<=pathLen(p.slice(tr.pi))*1.3+80){ tr.path=p=alt; tr.pi=0; tr._pass={node:S,k:qa.k}; } }
-      if(q && !(tr._pass && tr._pass.node===S) && tracksUsed(S,tr).has(q.k)){ tr.why=L(`čeká – v ${nodeSite.get(S).name} je kolej ${q.k+1} obsazená`,`waiting – track ${q.k+1} at ${nodeSite.get(S).name} is occupied`,`wartet – Gleis ${q.k+1} in ${nodeSite.get(S).name} ist belegt`); return false; }
+      if(q && !(tr._pass && tr._pass.node===S) && tracksUsed(S,tr).has(q.k)){ tr._needTrack=true; tr.why=L(`čeká – v ${nodeSite.get(S).name} je kolej ${q.k+1} obsazená`,`waiting – track ${q.k+1} at ${nodeSite.get(S).name} is occupied`,`wartet – Gleis ${q.k+1} in ${nodeSite.get(S).name} ist belegt`); return false; }
       if(q && !(tr._pass && tr._pass.node===S)) tr._pass={node:S,k:q.k}; } }
   if(tr.pi===0 && isStationNode(n) && nodeSite.has(dest) && dest!==n){ const vias=legVias(tr,tr.stopIdx);
     if(!vias.length && !safeBefore(tr,p,tr.pi)){ const r=arrivalFree(tr,n,dest); if(!r){ const dn=nodeSite.get(dest).name; tr.why=L(`čeká – v ${dn} není volná kolej (postav další kolej nebo výhybku)`,`waiting – no free track at ${dn} (add a track or a switch)`,`wartet – in ${dn} ist kein Gleis frei (Gleis oder Weiche bauen)`); return false; }
@@ -1521,8 +1521,8 @@ function tryEnter(tr){
   if(entrySig.has(n)){ let j=tr.pi+1; while(j<p.length-1 && portOf.has(p[j]) && portOf.has(p[j+1])) j++; const po=portOf.get(p[j]); if(po && p[j+1]===po.s.node){ const platBusy=(k,pt)=>trainsAt(po.s.node).some(o=>o!==tr && o.plat===k) || trains.some(o=>{ if(o===tr || o.st!=='run' || !o.path || o.path[o.path.length-2]!==pt) return false; const iN=o.path.indexOf(n); return iN>=0 && iN<o.pi; });
       let busy=platBusy(po.k,p[j]);
       if(busy){ const alt=routePath(n,dest,new Set(occupiedInto(dest,tr)),tr.pi>0?p[tr.pi-1]:null); if(alt && alt.length>2){ let jj=1; while(jj<alt.length-1 && portOf.has(alt[jj]) && portOf.has(alt[jj+1])) jj++; const ap=portOf.get(alt[jj]); if(ap && alt[jj+1]===dest && !platBusy(ap.k,alt[jj])){ tr.path=p=alt; tr.pi=0; busy=false; } } }   // another free track through the switches
-      if(busy){ tr.why=L(`čeká před ${po.s.name} na volnou kolej`,`waiting outside ${po.s.name} for its track`,`wartet vor ${po.s.name} auf sein Gleis`); return false; } } }
-  if(nx===dest && stationFull(dest,tr)){ { const sn=nodeSite.get(dest).name; tr.why=L(`čeká před stanicí ${sn}, koleje jsou obsazené`,`waiting outside ${sn}, all tracks taken`,`wartet vor ${sn}, alle Gleise belegt`); } return false; }
+      if(busy){ tr._needTrack=true; tr.why=L(`čeká před ${po.s.name} na volnou kolej`,`waiting outside ${po.s.name} for its track`,`wartet vor ${po.s.name} auf sein Gleis`); return false; } } }
+  if(nx===dest && stationFull(dest,tr)){ { const sn=nodeSite.get(dest).name; tr._needTrack=true; tr.why=L(`čeká před stanicí ${sn}, koleje jsou obsazené`,`waiting outside ${sn}, all tracks taken`,`wartet vor ${sn}, alle Gleise belegt`); } return false; }
   // a station exit leading into a signalled section has a departure signal
   if(signals.has(n) || isStationNode(n)){
     // like a dispatcher: if a train is coming the other way on our track, take the other track of a passing loop
@@ -1546,7 +1546,7 @@ function tryEnter(tr){
       if(alt && alt.length>1){ const ab=blockFrom(alt,0,trainLen(tr)+8), sv=tr.pi; tr.pi=0; const sb=stretchBlock(tr,alt); tr.pi=sv; if(!blockBusy(ab,tr) && !sb){ tr.path=p=alt; tr.pi=0; blk=ab; } else { tr.why=L('stojí u návěstidla','held at a signal','hält am Signal'); return false; } }
       else { tr.why=L('stojí u návěstidla','held at a signal','hält am Signal'); return false; }
     }
-    if(!passFree(tr,p)){ const S=blockFrom(p,tr.pi,trainLen(tr)+8).end; tr.why=L(`čeká – v ${nodeSite.get(S).name} není volná kolej pro průjezd`,`waiting – no free track to pass through ${nodeSite.get(S).name}`,`wartet – in ${nodeSite.get(S).name} ist kein Gleis für die Durchfahrt frei`); return false; }
+    if(!passFree(tr,p)){ const S=blockFrom(p,tr.pi,trainLen(tr)+8).end; tr._needTrack=true; tr.why=L(`čeká – v ${nodeSite.get(S).name} není volná kolej pro průjezd`,`waiting – no free track to pass through ${nodeSite.get(S).name}`,`wartet – in ${nodeSite.get(S).name} ist kein Gleis für die Durchfahrt frei`); return false; }
     blk.edges.forEach(k=>occ.set(k,tr.id));
   }
   if(tr.pi===0 && isStationNode(n)){ if(tr.plat>=0) tr._dep={node:n,k:tr.plat,odo:tr.odo||0}; tr.plat=-1; }
@@ -1641,10 +1641,13 @@ function repairTrain(tr){ tr.wreckNode=null; placeAt(tr,0); startLoading(tr); tr
 // Dispatcher's last resort: a train out on the line that has not moved for 2 game hours goes back to the station it came from, free of charge.
 function unstick(){ for(const tr of trains){ if((tr.st!=='run' && tr.st!=='hold') || (tr.st==='hold' && tr.pi===0 && tr.path && nodeSite.has(tr.path[0]))){ tr._stuck=null; continue; }   // waiting inside a station blocks nobody
     const od=Math.round((tr.odo||0)*10); if(!tr._stuck || tr._stuck.od!==od){ tr._stuck={od,t:gameMin}; continue; }
-    if(gameMin-tr._stuck.t<120) continue; tr._stuck=null; unstuckN++;
+    if(gameMin-tr._stuck.t<120) continue;
+    // waiting at a signal for a track in a full station is normal: it simply waits there (the player gets one hint)
+    if(tr._needTrack){ if(!tr._stuck.hint){ tr._stuck.hint=true; toast(L(`${tr.name} čeká u návěstidla na volnou kolej – ${tr.why}. Pomůže další kolej nebo výhybna.`,`${tr.name} is waiting at a signal for a free track – ${tr.why}. Another track or a passing loop would help.`,`${tr.name} wartet am Signal auf ein freies Gleis – ${tr.why}. Ein weiteres Gleis oder eine Ausweiche hilft.`),'',5000); } continue; }
+    tr._stuck=null; unstuckN++;
     const back=tr.stopIdx>=0?tr.stopIdx:0; releaseTrain(tr); tr._arrGrant=null; tr._pass=null; tr.legStart=null; tr.legKm=0;
     placeAt(tr,back); startLoading(tr); tr.cycleBase=null; if(cardTrain===tr) showTrainCard(tr);
-    toast(L(`Výpravčí vrátil zablokovaný vlak ${tr.name} do stanice ${site(tr.route[back]).name}, trať je zase volná.`,`The dispatcher sent the blocked train ${tr.name} back to ${site(tr.route[back]).name}; the line is clear again.`,`Der Fahrdienstleiter hat den blockierten Zug ${tr.name} nach ${site(tr.route[back]).name} zurückgeschickt.`),'',4500); dirty(); return; } }
+    toast(L(`Vlaky se na jednokolejce zablokovaly navzájem, výpravčí proto vrátil ${tr.name} do stanice ${site(tr.route[back]).name}.`,`Trains had blocked each other on single track, so the dispatcher sent ${tr.name} back to ${site(tr.route[back]).name}.`,`Züge hatten sich auf eingleisiger Strecke blockiert, daher wurde ${tr.name} nach ${site(tr.route[back]).name} zurückgeschickt.`),'',4500); dirty(); return; } }
 let unstickAcc=0, unstuckN=0;
 function step(dt){
   gameMin+=dt; produce(dt); unstickAcc+=dt; if(unstickAcc>=5){ unstickAcc=0; unstick(); }
@@ -2320,6 +2323,16 @@ function buildCatenary(segs){ let mi=0, wi=0, carry=0;
 const bedGeo=(()=>{ const g=new T.BoxGeometry(1,1,1); g.translate(0,0.5,0); const a=g.attributes.position; for(let i=0;i<a.count;i++) if(a.getY(i)>0.9) a.setZ(i,a.getZ(i)*0.66); g.computeVertexNormals(); return g; })();
 const ballastIM=new T.InstancedMesh(bedGeo,mat('#a29c93'),MAXS), railIM=new T.InstancedMesh(box,M.rail,MAXS*2), sleeperIM=new T.InstancedMesh(box,M.sleeper,MAXS*8), padIM=new T.InstancedMesh(new T.CylinderGeometry(1,1,1,12),M.ballast,MAXS);
 [ballastIM,railIM,sleeperIM,padIM].forEach(m=>{ m.count=0; m.receiveShadow=true; m.castShadow=true; m.frustumCulled=false; scene.add(m); }); ballastIM.castShadow=false; padIM.castShadow=false;
+// over water the gravel bed gives way to a bridge deck, so a crossing reads as a bridge and not as a dam
+const deckIM=new T.InstancedMesh(box,mat('#8f969e'),MAXS); deckIM.count=0; deckIM.receiveShadow=true; deckIM.castShadow=true; deckIM.frustumCulled=false; scene.add(deckIM);
+const overWater=(x,y)=>nearRiver(x,y,8.6) || inLake(x,y,1);
+function wetSplit(vsegs){ const out=[]; for(const s of vsegs){ const L=Math.hypot(s.x2-s.x1,s.y2-s.y1);
+    if(s.thr || L<0.5 || (!nearRiver((s.x1+s.x2)/2,(s.y1+s.y2)/2,L/2+12) && !inLake((s.x1+s.x2)/2,(s.y1+s.y2)/2,L/2+10))){ out.push(s); continue; }
+    const n=Math.max(1,Math.ceil(L/4)), h1=s.h1||0, h2=s.h2||0; let run=null;
+    for(let i=0;i<n;i++){ const f0=i/n, f1=(i+1)/n, x1=s.x1+(s.x2-s.x1)*f0, y1=s.y1+(s.y2-s.y1)*f0, x2=s.x1+(s.x2-s.x1)*f1, y2=s.y1+(s.y2-s.y1)*f1, wet=overWater((x1+x2)/2,(y1+y2)/2);
+      if(run && run.wet===wet){ run.x2=x2; run.y2=y2; run.h2=h1+(h2-h1)*f1; } else { if(run) out.push(run); run={x1,y1,x2,y2,h1:h1+(h2-h1)*f0,h2:h1+(h2-h1)*f1,k:s.k,wet}; } }
+    if(run) out.push(run); }
+  return out; }
 const FLY_COST=2000, FLY_HALF=54, FLY_H=12, FLY_DECK=14;
 let flyovers=[];
 function sharesNode(a,b){ return a.a===b.a||a.a===b.b||a.b===b.a||a.b===b.b; }
@@ -2401,7 +2414,7 @@ function ownKeys(k){ const out=new Set([k]); if(!k) return out; const e=edges.ge
 function addBridge(A,B,t,len,k){ const dx=B.x-A.x, dy=B.y-A.y; const x=A.x+dx*t, y=A.y+dy*t; len=len||22; const own=ownKeys(k), ux=dx/Math.hypot(dx,dy), uy=dy/Math.hypot(dx,dy);
   const g=new T.Group(); g.position.set(x-CX,flyH(x,y,Math.atan2(dy,dx),k)+hillH(x,y),y-CZ); g.rotation.y=-Math.atan2(dy,dx);
   const sideFree=sd=>!crossTrackNear(x-uy*sd*9,y+ux*sd*9,5,own) && !crossTrackNear(x-uy*sd*9+ux*len/2,y+ux*sd*9+uy*len/2,5,own) && !crossTrackNear(x-uy*sd*9-ux*len/2,y+ux*sd*9-uy*len/2,5,own);
-  for(const s of [-1,1]){ if(!sideFree(s)) continue;   // a track running alongside: leave the truss off that side rather than build it through the other line
+  for(const s of [-1,1]){ if(!sideFree(s)){ g.add(mesh(box,M.girder,0,1.2,s*5.4,len+6,2.2,0.9)); continue; }   // a track running alongside: a low plate girder on that side instead of the truss
     g.add(mesh(box,M.girder,0,10,s*5.6,len,1,1)); g.add(mesh(box,M.girder,0,2.4,s*5.6,len,1,1));
     for(let i=0;i<=5;i++){ const xx=-len/2+i*len/5; g.add(mesh(box,M.girder,xx,6.2,s*5.6,0.8,8,0.8)); if(i<5){ const d=mesh(box,M.girder,xx+len/10,6.2,s*5.6,0.6,9.6,0.6); d.rotation.z=(i%2?1:-1)*0.72; g.add(d); } }
     for(let i=0;i<=8;i++) g.add(mesh(box,M.metalDark,-len/2-6+i*(len+12)/8,3.4,s*6.8,0.4,2.2,0.4,false)); g.add(mesh(box,M.metalDark,0,4.4,s*6.8,len+12,0.4,0.4,false)); }
@@ -2446,25 +2459,26 @@ function terrainSegs(segs){ const out=[];
   return out; }
 let decorSig=null;
 function rebuildTracks(){
-  buildEdgeHash(); computeFlyovers(); const segs=trackSegments(), vsegs=terrainSegs(segs); let b=0,r=0,sl=0,pd=0;
+  buildEdgeHash(); computeFlyovers(); const segs=trackSegments(), vsegs=wetSplit(terrainSegs(segs)); let b=0,r=0,sl=0,pd=0,dk=0;
   let carry=2.3, px0=null, py0=null;   // sleepers run on at an even spacing from one piece of a curve to the next
   for(const s of vsegs){ if(b>=MAXS) break; const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy); if(L<0.01) continue; const ang=-Math.atan2(dy,dx), mx=(s.x1+s.x2)/2-CX, mz=(s.y1+s.y2)/2-CZ;
     const h1=s.h1||0, h2=s.h2||0, hm=(h1+h2)/2, pit=Math.atan2(h2-h1,L), LL=Math.hypot(L,h2-h1), px=-dy/L, py=dx/L;
-    if(!s.thr) setInstP(ballastIM,b++,mx,hm-0.05,mz,LL+1.6,1.45,14.5,ang,pit);   // the switches of a throat share one gravel bed (below)
+    if(s.wet){ if(dk<MAXS) setInstP(deckIM,dk++,mx,hm+0.55,mz,LL+0.2,1.1,9.6,ang,pit); }
+    else if(!s.thr) setInstP(ballastIM,b++,mx,hm-0.05,mz,LL+1.6,1.45,14.5,ang,pit);   // the switches of a throat share one gravel bed (below)
     for(const sg of [-1,1]) setInstP(railIM,r++,mx+px*2.4*sg,2.2+hm,mz+py*2.4*sg,LL+0.4,0.9,0.9,ang,pit);
     if(px0===null || Math.hypot(s.x1-px0,s.y1-py0)>0.5) carry=2.3; px0=s.x2; py0=s.y2;
     let d=s.thr?L:carry; for(; d<L && sl<MAXS*8; d+=4.6){ const f=d/L; setInst(sleeperIM,sl++,s.x1+dx*f-CX,1.55+h1+(h2-h1)*f,s.y1+dy*f-CZ,1.8,0.7,8.4,ang); } carry=d-L; }
   for(const [id,set] of adj){ if(!set.size||pd>=MAXS||set.size===2||nodeSite.has(id)||portOf.has(id)) continue; const n=nodes[id]; setInst(padIM,pd++,n.x-CX,0.6+hillH(n.x,n.y),n.y-CZ,5.2,1.2,5.2); }
-  ballastIM.count=b; railIM.count=r; sleeperIM.count=sl; padIM.count=pd;
+  ballastIM.count=b; railIM.count=r; sleeperIM.count=sl; padIM.count=pd; deckIM.count=dk; deckIM.instanceMatrix.needsUpdate=true;
   [ballastIM,railIM,sleeperIM,padIM].forEach(m=>m.instanceMatrix.needsUpdate=true);
   bridgeGroup.clear(); portalGroup.clear(); switchGroup.clear(); flyGroup.clear(); flyovers.forEach(addFlyover); buildCatenary(vsegs.filter(s=>!s.thr));
   { const done=[]; for(const sg of segs){ if(sg.thr) continue; const A={x:sg.x1,y:sg.y1}, B={x:sg.x2,y:sg.y2};
-      for(const [p,q] of riverSegs){ const t=segX(A,B,{x:p[0],y:p[1]},{x:q[0],y:q[1]}); if(t===null) continue; const x=A.x+(B.x-A.x)*t, y=A.y+(B.y-A.y)*t; if(done.some(d=>Math.hypot(d.x-x,d.y-y)<14)) continue;
-        const [ux,uy]=unit(A.x,A.y,B.x,B.y), [rx,ry]=unit(p[0],p[1],q[0],q[1]), sn=Math.abs(ux*ry-uy*rx); done.push({x,y,truss:sn>=0.5});
+      for(const [p,q] of riverSegs){ const t=segX(A,B,{x:p[0],y:p[1]},{x:q[0],y:q[1]}); if(t===null) continue; const x=A.x+(B.x-A.x)*t, y=A.y+(B.y-A.y)*t; if(done.some(d=>Math.hypot(d.x-x,d.y-y)<14 && d.own.has(sg.k))) continue;   // one bridge per line; another line close by gets its own
+        const [ux,uy]=unit(A.x,A.y,B.x,B.y), [rx,ry]=unit(p[0],p[1],q[0],q[1]), sn=Math.abs(ux*ry-uy*rx); done.push({x,y,truss:sn>=0.5,own:ownKeys(sg.k)});
         if(sn>=0.5) addBridge(A,B,t,Math.min(60,16/sn+8),sg.k); }
       // running along the water: a low girder viaduct instead of a row of truss bridges
       const L=Math.hypot(B.x-A.x,B.y-A.y), wetLake=!!inLake((A.x+B.x)/2,(A.y+B.y)/2,6+L/2); if(!wetLake && !nearRiver((A.x+B.x)/2,(A.y+B.y)/2,9+L/2)) continue; const n=Math.max(1,Math.round(L/6)), ang=Math.atan2(B.y-A.y,B.x-A.x);
-      for(let k=0;k<n;k++){ const f=(k+0.5)/n, x=A.x+(B.x-A.x)*f, y=A.y+(B.y-A.y)*f; if((!nearRiver(x,y,9) && !inLake(x,y,3)) || done.some(d=>Math.hypot(d.x-x,d.y-y)<14 && d.truss)) continue; if(inLake(x,y,3)) addLakeBridge(x,y,ang,L/n,sg.k); else addViaduct(x,y,ang,L/n,k%3===1,sg.k); } } }
+      for(let k=0;k<n;k++){ const f=(k+0.5)/n, x=A.x+(B.x-A.x)*f, y=A.y+(B.y-A.y)*f; if((!nearRiver(x,y,9) && !inLake(x,y,3)) || done.some(d=>Math.hypot(d.x-x,d.y-y)<14 && d.truss && d.own.has(sg.k))) continue; if(inLake(x,y,3)) addLakeBridge(x,y,ang,L/n,sg.k); else addViaduct(x,y,ang,L/n,k%3===1,sg.k); } } }
   // tunnel portals exactly where the line enters the rock
   if(MOUNTAINS.length) for(const sg of segs){ if(!nearTerrain(sg.x1,sg.y1,sg.x2,sg.y2)) continue; const L=Math.hypot(sg.x2-sg.x1,sg.y2-sg.y1), n=Math.max(2,Math.ceil(L/3)), ang=Math.atan2(sg.y2-sg.y1,sg.x2-sg.x1); let was=rockH(sg.x1,sg.y1)>TUN;
     for(let i=1;i<=n;i++){ const x=sg.x1+(sg.x2-sg.x1)*i/n, y=sg.y1+(sg.y2-sg.y1)*i/n, now=rockH(x,y)>TUN; if(now!==was){ addPortal(x,y, now?ang:ang+Math.PI); was=now; } } }
